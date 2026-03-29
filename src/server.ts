@@ -7,7 +7,13 @@ import authRouter from "./routes/auth";
 
 const app = express();
 
-app.use(cors());
+app.use(cors({
+  origin: [
+    "http://localhost:3000",
+    "https://qualifresh2026.netlify.app"
+  ],
+  credentials: true
+}));
 app.use(express.json());
 
 app.get("/", (req, res) => {
