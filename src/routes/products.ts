@@ -4,7 +4,7 @@ import { authMiddleware } from "../middleware/auth";
 
 const router = Router();
 
-// Public: GET /api/products
+// Public: GET /api/products  (only active products — for users)
 router.get("/", async (req, res) => {
   try {
     const products = await Product.find({ isActive: true }).sort({ name: 1 });
@@ -15,7 +15,18 @@ router.get("/", async (req, res) => {
   }
 });
 
-// Public: GET /api/products/:slug
+// Admin: GET /api/products/admin/all  (ALL products including inactive — for admin panel)
+router.get("/admin/all", authMiddleware, async (req, res) => {
+  try {
+    const products = await Product.find({}).sort({ name: 1 });
+    res.json(products);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch products" });
+  }
+});
+
+// Public: GET /api/products/:slug  (only active — for users)
 router.get("/:slug", async (req, res) => {
   try {
     const product = await Product.findOne({

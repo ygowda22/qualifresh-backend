@@ -21,14 +21,17 @@ const run = async () => {
     console.log("Admin user already exists");
   }
 
-  // Seed products (optional: clear first)
-  const count = await Product.countDocuments();
-  if (count === 0) {
-    await Product.insertMany(seedProducts);
-    console.log("Products seeded");
-  } else {
-    console.log("Products already exist, skipping seeding");
-  }
+  // Seed products — upsert by slug so deleted products are restored without duplicating
+  const ops = seedProducts.map(p => ({
+    updateOne: {
+      filter: { slug: p.slug },
+      update: { $setOnInsert: p },
+      upsert: true,
+    }
+  }));
+  const result = await Product.bulkWrite(ops as any);
+  const added = result.upsertedCount ?? 0;
+  console.log(`Products upserted: ${added} new, ${seedProducts.length - added} already existed`);
 
   process.exit(0);
 };

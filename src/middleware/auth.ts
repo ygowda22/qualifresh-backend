@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 
 export interface AuthRequest extends Request {
-  user?: { id: string; email: string };
+  user?: { id: string; email: string; role?: string };
 }
 
 export const authMiddleware = (
@@ -17,12 +17,19 @@ export const authMiddleware = (
   const token = authHeader.split(" ")[1];
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as {
-      id: string;
-      email: string;
+      id: string; email: string; role?: string;
     };
     req.user = decoded;
     next();
   } catch {
     return res.status(401).json({ message: "Invalid token" });
   }
+};
+
+export const adminOnly = (req: AuthRequest, res: Response, next: NextFunction) => {
+  authMiddleware(req, res, () => {
+    // Allow if the token has no role (legacy admin tokens from AdminUser) or role is 'admin'
+    if (!req.user?.role || req.user.role === "admin") return next();
+    return res.status(403).json({ message: "Admin access required" });
+  });
 };
