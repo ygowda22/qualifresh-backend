@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { Order } from "../models/Order";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
-import { sendOrderConfirmation, sendAdminOrderNotification } from "../services/email";
+import { sendOrderConfirmation, sendAdminOrderNotification, sendOrderStatusUpdate } from "../services/email";
 
 const router = Router();
 
@@ -78,8 +78,21 @@ router.get("/my", authMiddleware, async (req: AuthRequest, res) => {
 router.put("/:id/status", authMiddleware, async (req, res) => {
   try {
     const { status } = req.body;
-    const order = await Order.findByIdAndUpdate(req.params.id, { status }, { new: true });
+    const order = await Order.findByIdAndUpdate(req.params.id, { status }, { new: true }).populate("user", "name email");
     if (!order) return res.status(404).json({ message: "Not found" });
+
+    // Send status update email to customer (non-blocking)
+    const customerEmail = (order as any).guestEmail || (order as any).user?.email || "";
+    const customerName  = (order as any).guestName  || (order as any).user?.name  || "Customer";
+    if (customerEmail) {
+      sendOrderStatusUpdate(customerEmail, customerName, {
+        orderNumber:  (order as any).orderNumber,
+        status,
+        deliverySlot: (order as any).deliverySlot,
+        total:        (order as any).total,
+      }).catch(console.error);
+    }
+
     res.json(order);
   } catch (err) {
     res.status(500).json({ message: "Failed to update order" });

@@ -128,6 +128,54 @@ export async function sendAdminOrderNotification(order: {
   });
 }
 
+export async function sendOrderStatusUpdate(
+  to: string,
+  name: string,
+  order: {
+    orderNumber: string;
+    status: string;
+    deliverySlot: string;
+    total: number;
+  }
+) {
+  const STATUS_LABELS: Record<string, string> = {
+    pending:          "Pending",
+    confirmed:        "Confirmed ✅",
+    out_for_delivery: "Out for Delivery 🚚",
+    delivered:        "Delivered 🎉",
+    cancelled:        "Cancelled ❌",
+  };
+  const statusLabel = STATUS_LABELS[order.status] || order.status;
+
+  const html = `
+    <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;background:#f9fafb;padding:20px">
+      <div style="background:#1a3c2e;padding:24px;text-align:center;border-radius:12px 12px 0 0">
+        <h1 style="color:#a3e635;margin:0;font-size:26px">QualiFresh</h1>
+        <p style="color:rgba(255,255,255,0.7);margin:4px 0 0;font-size:13px">Order Update</p>
+      </div>
+      <div style="background:#fff;padding:28px;border-radius:0 0 12px 12px;box-shadow:0 4px 24px rgba(0,0,0,.08)">
+        <h2 style="color:#1a3c2e;margin:0 0 8px">Order Status Updated</h2>
+        <p style="color:#6b7280;margin:0 0 20px">Hi ${name}, your order status has been updated.</p>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px 18px;margin-bottom:20px">
+          <div style="font-size:13px;color:#374151;margin-bottom:6px"><strong style="color:#166534">Order #${order.orderNumber}</strong></div>
+          <div style="font-size:22px;font-weight:700;color:#1a3c2e;margin-bottom:6px">${statusLabel}</div>
+          <div style="font-size:13px;color:#4b7c5e">Delivery slot: ${order.deliverySlot}</div>
+          <div style="font-size:13px;color:#4b7c5e;margin-top:4px">Order total: <strong>₹${order.total}</strong></div>
+        </div>
+        <p style="color:#6b7280;font-size:13px">
+          Questions? WhatsApp us or email <a href="mailto:rohit@qualifresh.in" style="color:#2d8a4e">rohit@qualifresh.in</a>
+        </p>
+      </div>
+    </div>`;
+
+  await transporter.sendMail({
+    from: `"QualiFresh" <${process.env.EMAIL_USER}>`,
+    to,
+    subject: `Order #${order.orderNumber} — ${statusLabel} | QualiFresh`,
+    html,
+  });
+}
+
 export async function sendContactEmail(data: {
   name: string;
   email: string;
