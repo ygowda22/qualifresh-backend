@@ -17,7 +17,7 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
   .split(",")
   .map(o => o.trim())
   .filter(Boolean)
-  .concat(["http://localhost:3000", "https://qualifresh2026.netlify.app"]);
+  .concat(["http://localhost:3000", "https://qualifresh2026.netlify.app", "https://qualifresh-frontend.vercel.app"]);
 
 app.use(cors({
   origin: (origin, callback) => {
