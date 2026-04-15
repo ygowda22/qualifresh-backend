@@ -13,11 +13,17 @@ import adminUsersRouter from "./routes/adminUsers";
 
 const app = express();
 
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map(o => o.trim())
+  .filter(Boolean)
+  .concat(["http://localhost:3000", "https://qualifresh2026.netlify.app"]);
+
 app.use(cors({
-  origin: [
-    "http://localhost:3000",
-    "https://qualifresh2026.netlify.app",
-  ],
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    callback(new Error("Not allowed by CORS"));
+  },
   credentials: true,
 }));
 app.use(express.json());
