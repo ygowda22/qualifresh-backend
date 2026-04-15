@@ -6,7 +6,8 @@
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "seed": "ts-node-dev --transpile-only src/seed/seed.ts"
+    "seed": "ts-node-dev --transpile-only src/seed/seed.ts",
+    "migrate:images": "ts-node-dev --transpile-only src/scripts/migrate-image-urls.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.103.2",
