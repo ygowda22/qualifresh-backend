@@ -14,6 +14,7 @@ export interface IProduct extends Document {
   stock: number;
   tags: string[];
   images: string[];
+  imageUrl: string;
 }
 
 const ProductSchema = new Schema<IProduct>(
@@ -30,7 +31,8 @@ const ProductSchema = new Schema<IProduct>(
     isActive: { type: Boolean, default: true },
     stock: { type: Number, default: 0 },
     tags: [{ type: String }],
-    images: [{ type: String }]
+    images: [{ type: String }],
+    imageUrl: { type: String, default: "" }
   },
   { timestamps: true }
 );
