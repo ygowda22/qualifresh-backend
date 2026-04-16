@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { User } from "../models/User";
+import { Product } from "../models/Product";
+import { authMiddleware, AuthRequest } from "../middleware/auth";
 import jwt from "jsonwebtoken";
 
 const router = Router();
@@ -56,6 +58,96 @@ router.post("/login", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Login failed" });
+  }
+});
+
+// PUT /api/users/profile  (authenticated)
+router.put("/profile", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const { name, phone } = req.body;
+    const user = await User.findByIdAndUpdate(
+      req.user!.id,
+      { ...(name ? { name } : {}), ...(phone ? { phone } : {}) },
+      { new: true, select: "-password" }
+    );
+    if (!user) return res.status(404).json({ message: "User not found" });
+    res.json({ user: { id: user._id, name: user.name, email: user.email, phone: user.phone } });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to update profile" });
+  }
+});
+
+// GET /api/users/cart  — return saved cart as plain object { productId: qty }
+router.get("/cart", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const user = await User.findById(req.user!.id).select("cart");
+    if (!user) return res.status(404).json({ message: "User not found" });
+    const cart: Record<string, number> = {};
+    user.cart.forEach((qty: number, id: string) => { if (qty > 0) cart[id] = qty; });
+    res.json({ cart });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch cart" });
+  }
+});
+
+// PUT /api/users/cart  — save cart (full replace)
+router.put("/cart", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const incoming: Record<string, number> = req.body.cart || {};
+    // Sanitise: only positive integer quantities
+    const cleaned: Record<string, number> = {};
+    Object.entries(incoming).forEach(([k, v]) => {
+      const q = Math.floor(Number(v));
+      if (q > 0) cleaned[k] = q;
+    });
+    await User.findByIdAndUpdate(req.user!.id, { $set: { cart: cleaned } });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to save cart" });
+  }
+});
+
+// GET /api/users/wishlist  — returns array of full product objects
+router.get("/wishlist", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const user = await User.findById(req.user!.id).populate({
+      path: "wishlist",
+      model: Product,
+      match: { isActive: true },
+      select: "_id name slug price imageUrl category quantityLabel stock priceUnit",
+    });
+    if (!user) return res.status(404).json({ message: "User not found" });
+    res.json({ wishlist: user.wishlist });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch wishlist" });
+  }
+});
+
+// POST /api/users/wishlist/:productId  — add to wishlist (idempotent)
+router.post("/wishlist/:productId", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const { productId } = req.params;
+    await User.findByIdAndUpdate(
+      req.user!.id,
+      { $addToSet: { wishlist: productId } }
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to add to wishlist" });
+  }
+});
+
+// DELETE /api/users/wishlist/:productId  — remove from wishlist
+router.delete("/wishlist/:productId", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const { productId } = req.params;
+    await User.findByIdAndUpdate(
+      req.user!.id,
+      { $pull: { wishlist: productId } }
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to remove from wishlist" });
   }
 });
 

@@ -10,6 +10,8 @@ export interface IUser extends Document {
   city?: string;
   role: "user" | "admin";
   isActive: boolean;
+  wishlist: mongoose.Types.ObjectId[];
+  cart: Map<string, number>;
   comparePassword(candidate: string): Promise<boolean>;
 }
 
@@ -23,6 +25,8 @@ const UserSchema = new Schema<IUser>(
     city:     { type: String, default: "" },
     role:     { type: String, enum: ["user", "admin"], default: "user" },
     isActive: { type: Boolean, default: true },
+    wishlist: [{ type: Schema.Types.ObjectId, ref: "Product", default: [] }],
+    cart: { type: Map, of: Number, default: {} },
   },
   { timestamps: true }
 );
