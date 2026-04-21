@@ -1,0 +1,83 @@
+name: Monthly MongoDB Backup
+
+on:
+  schedule:
+    # Runs at 02:00 UTC on the 1st of every month
+    - cron: "0 2 1 * *"
+  workflow_dispatch: # Allow manual trigger from GitHub UI
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Set backup folder name
+        id: vars
+        run: echo "FOLDER=qualifresh-$(date +%Y-%m)" >> "$GITHUB_OUTPUT"
+
+      - name: Install MongoDB Database Tools
+        run: |
+          wget -q https://fastdl.mongodb.org/tools/db/mongodb-database-tools-ubuntu2204-x86_64-100.9.5.deb
+          sudo dpkg -i mongodb-database-tools-ubuntu2204-x86_64-100.9.5.deb
+          mongodump --version
+
+      - name: Run mongodump
+        env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+        run: |
+          FOLDER="${{ steps.vars.outputs.FOLDER }}"
+          mongodump \
+            --uri="$MONGO_URI" \
+            --out="/tmp/$FOLDER" \
+            --gzip
+          echo "Dump complete. Contents:"
+          ls -lh "/tmp/$FOLDER"
+
+      - name: Compress dump folder
+        run: |
+          FOLDER="${{ steps.vars.outputs.FOLDER }}"
+          tar -czf "/tmp/${FOLDER}.tar.gz" -C /tmp "$FOLDER"
+          echo "Archive size: $(du -sh /tmp/${FOLDER}.tar.gz | cut -f1)"
+
+      - name: Install AWS CLI (for R2 S3-compatible upload)
+        run: |
+          pip install --quiet awscli
+
+      - name: Upload to Cloudflare R2
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID:         ${{ secrets.R2_ACCOUNT_ID }}
+        run: |
+          FOLDER="${{ steps.vars.outputs.FOLDER }}"
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+
+          aws s3 cp \
+            "/tmp/${FOLDER}.tar.gz" \
+            "s3://qualifresh-backups/${FOLDER}/${FOLDER}.tar.gz" \
+            --endpoint-url "$ENDPOINT" \
+            --region auto
+
+          echo "✅ Backup uploaded: qualifresh-backups/${FOLDER}/${FOLDER}.tar.gz"
+
+      - name: Verify upload
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID:         ${{ secrets.R2_ACCOUNT_ID }}
+        run: |
+          FOLDER="${{ steps.vars.outputs.FOLDER }}"
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+
+          aws s3 ls \
+            "s3://qualifresh-backups/${FOLDER}/" \
+            --endpoint-url "$ENDPOINT" \
+            --region auto
+
+      - name: Clean up local files
+        if: always()
+        run: |
+          FOLDER="${{ steps.vars.outputs.FOLDER }}"
+          rm -rf "/tmp/$FOLDER" "/tmp/${FOLDER}.tar.gz"
+          echo "Local temp files removed."

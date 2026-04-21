@@ -64,10 +64,15 @@ router.get("/", authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
-// GET /api/orders/my — get logged-in user orders
+// GET /api/orders/my — get logged-in user orders (by userId ref OR by email for legacy orders)
 router.get("/my", authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const orders = await Order.find({ user: req.user!.id }).sort({ createdAt: -1 });
+    const orders = await Order.find({
+      $or: [
+        { user: req.user!.id },
+        { guestEmail: req.user!.email },
+      ],
+    }).sort({ createdAt: -1 });
     res.json(orders);
   } catch (err) {
     res.status(500).json({ message: "Failed to fetch orders" });

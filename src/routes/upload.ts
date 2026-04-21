@@ -1,27 +1,40 @@
 import { Router, Request, Response } from "express";
 import multer from "multer";
 import path from "path";
-import { createClient } from "@supabase/supabase-js";
+import { v2 as cloudinary } from "cloudinary";
 import { authMiddleware } from "../middleware/auth";
 
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key:    process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
-const BUCKET = "product-images";
+const ALLOWED_EXT = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
 
-// Keep file in memory — no disk writes needed
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+  limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    const allowed = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
     const ext = path.extname(file.originalname).toLowerCase();
-    if (allowed.includes(ext)) cb(null, true);
+    if (ALLOWED_EXT.includes(ext)) cb(null, true);
     else cb(new Error("Only image files are allowed"));
   },
 });
+
+function streamUpload(
+  buffer: Buffer,
+  options: object
+): Promise<{ secure_url: string; public_id: string }> {
+  return new Promise((resolve, reject) => {
+    cloudinary.uploader
+      .upload_stream(options, (error, result) => {
+        if (error || !result) reject(error ?? new Error("No result from Cloudinary"));
+        else resolve(result as { secure_url: string; public_id: string });
+      })
+      .end(buffer);
+  });
+}
 
 const router = Router();
 
@@ -31,25 +44,21 @@ router.post("/", authMiddleware, upload.single("image"), async (req: Request, re
 
   try {
     const ext      = path.extname(req.file.originalname).toLowerCase();
-    const baseName = path.basename(req.file.originalname, ext).replace(/\s+/g, "-").toLowerCase();
-    const fileName = `${baseName}-${Date.now()}${ext}`;
+    const slug     = req.body.slug as string | undefined;
+    const baseName = slug
+      ? slug.replace(/[^a-z0-9-]/gi, "-").toLowerCase()
+      : path.basename(req.file.originalname, ext).replace(/\s+/g, "-").toLowerCase();
+    const folder   = (req.body.folder as string) || "qualifresh-products";
 
-    const { error } = await supabase.storage
-      .from(BUCKET)
-      .upload(fileName, req.file.buffer, {
-        contentType: req.file.mimetype,
-        upsert: false,
-      });
+    const result = await streamUpload(req.file.buffer, {
+      folder,
+      public_id:     `${baseName}-${Date.now()}`,
+      resource_type: "image",
+    });
 
-    if (error) {
-      console.error("Supabase upload error:", error);
-      return res.status(500).json({ message: "Storage upload failed", detail: error.message });
-    }
-
-    const { data } = supabase.storage.from(BUCKET).getPublicUrl(fileName);
-    return res.json({ url: data.publicUrl, filename: fileName });
+    return res.json({ url: result.secure_url, filename: result.public_id });
   } catch (err) {
-    console.error("Upload error:", err);
+    console.error("Cloudinary upload error:", err);
     return res.status(500).json({ message: "Upload failed" });
   }
 });
