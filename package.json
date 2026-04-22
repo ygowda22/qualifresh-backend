@@ -7,17 +7,20 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "seed": "ts-node-dev --transpile-only src/seed/seed.ts",
-    "migrate:images": "ts-node-dev --transpile-only src/scripts/migrate-image-urls.ts"
+    "migrate:images": "ts-node-dev --transpile-only src/scripts/migrate-image-urls.ts",
+    "migrate:cloudinary": "ts-node-dev --transpile-only src/scripts/migrate-to-cloudinary.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.103.2",
     "bcryptjs": "^2.4.3",
+    "cloudinary": "^1.41.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.0",
     "express": "^4.19.0",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.3.0",
     "multer": "^2.1.1",
+    "multer-storage-cloudinary": "^4.0.0",
     "nodemailer": "^8.0.4"
   },
   "devDependencies": {
