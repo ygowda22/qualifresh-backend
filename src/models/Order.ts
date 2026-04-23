@@ -56,10 +56,19 @@ const OrderSchema = new Schema<IOrder>(
   { timestamps: true }
 );
 
+async function getNextOrderNumber(): Promise<string> {
+  const db = mongoose.connection.db!;
+  const counter = await db.collection<{ _id: string; seq: number }>("counters").findOneAndUpdate(
+    { _id: "orderNumber" },
+    { $inc: { seq: 1 } },
+    { returnDocument: "after", upsert: true }
+  );
+  return `QF-${counter!.seq}`;
+}
+
 OrderSchema.pre("save", async function (next) {
   if (!this.orderNumber) {
-    const count = await mongoose.model("Order").countDocuments();
-    this.orderNumber = `QF-${String(count + 1001).padStart(4, "0")}`;
+    this.orderNumber = await getNextOrderNumber();
   }
   next();
 });
