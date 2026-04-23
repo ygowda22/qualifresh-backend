@@ -44,6 +44,9 @@ router.get("/:slug", async (req, res) => {
 // Admin: POST /api/products
 router.post("/", authMiddleware, async (req, res) => {
   try {
+    if (!req.body.quantityLabel || req.body.quantityLabel.trim() === "") {
+      return res.status(400).json({ error: "quantityLabel is required" });
+    }
     const product = await Product.create(req.body);
     res.status(201).json(product);
   } catch (err) {
