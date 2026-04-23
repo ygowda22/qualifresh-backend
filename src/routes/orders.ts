@@ -104,6 +104,17 @@ router.put("/:id/status", authMiddleware, async (req, res) => {
   }
 });
 
+// DELETE /api/orders/:id — admin: delete order
+router.delete("/:id", authMiddleware, async (req, res) => {
+  try {
+    const order = await Order.findByIdAndDelete(req.params.id);
+    if (!order) return res.status(404).json({ message: "Order not found" });
+    res.json({ message: "Order deleted" });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to delete order" });
+  }
+});
+
 // GET /api/orders/analytics — admin: dashboard stats
 router.get("/analytics", authMiddleware, async (req: AuthRequest, res) => {
   try {
