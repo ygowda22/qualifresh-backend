@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import SMTPTransport from "nodemailer/lib/smtp-transport";
 
 const transporter = nodemailer.createTransport({
  host:   process.env.EMAIL_HOST   || "smtp.gmail.com",
@@ -8,7 +9,11 @@ const transporter = nodemailer.createTransport({
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
   },
-});
+ tls: {
+    rejectUnauthorized: false
+  },
+  family: 4,
+} as SMTPTransport.Options);
 
 export async function sendOrderConfirmation(
   to: string,
