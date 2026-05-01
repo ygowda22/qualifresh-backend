@@ -19,17 +19,19 @@ import nodemailer from "nodemailer";
 import SMTPTransport from "nodemailer/lib/smtp-transport";
 
 const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: false,
+  host: process.env.EMAIL_HOST || "smtp.gmail.com",
+  port: Number(process.env.EMAIL_PORT) || 587,
+  secure: false, // REQUIRED for port 587
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
   },
-  tls: {
-    rejectUnauthorized: false,
-  },
-  family: 4, // FORCE IPv4 (critical)
+  ...(process.env.NODE_ENV === "development" && {
+    tls: {
+      rejectUnauthorized: false,
+    },
+  }),
+  family: 4, // FORCE IPv4 (helps with some connection issues)
 } as SMTPTransport.Options);
 
 
