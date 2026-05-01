@@ -26,11 +26,9 @@ const transporter = nodemailer.createTransport({
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
   },
-  ...(process.env.NODE_ENV === "development" && {
-    tls: {
-      rejectUnauthorized: false,
-    },
-  }),
+   tls: {
+    rejectUnauthorized: false, // ALWAYS include this on Render
+  },
   family: 4, // FORCE IPv4 (helps with some connection issues)
 } as SMTPTransport.Options);
 
