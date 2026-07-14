@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { Order } from "../models/Order";
+import { Product } from "../models/Product";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
 import { sendOrderConfirmation, sendAdminOrderNotification, sendOrderStatusUpdate } from "../services/email";
 
@@ -16,6 +17,14 @@ router.post("/", async (req, res) => {
 
     if (!items?.length || !deliveryAddress || !deliverySlot)
       return res.status(400).json({ message: "Missing required fields" });
+
+    const productIds = items.map((i: { productId: string }) => i.productId).filter(Boolean);
+    const outOfStock = await Product.find({ _id: { $in: productIds }, stock: 0 }).select("name");
+    if (outOfStock.length) {
+      return res.status(400).json({
+        message: `Out of stock: ${outOfStock.map(p => p.name).join(", ")}. Remove to proceed.`,
+      });
+    }
 
     const order = await Order.create({
       user:           userId || undefined,

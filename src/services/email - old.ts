@@ -1,31 +1,40 @@
-import { BrevoClient } from "@getbrevo/brevo";
+import nodemailer from "nodemailer";
+import SMTPTransport from "nodemailer/lib/smtp-transport";
 
 // Provide a minimal declaration for `process` to satisfy TypeScript
 // when @types/node isn't installed in the environment.
 declare const process: { env: { [key: string]: string | undefined } };
 
-const brevo = new BrevoClient({
-  apiKey: process.env.BREVO_API_KEY || "",
+const transporter = nodemailer.createTransport({
+ host:   process.env.EMAIL_HOST   || "smtp.gmail.com",
+  port:   Number(process.env.EMAIL_PORT) || 587,
+  secure: false,// REQUIRED for port 587
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+ tls: {
+    rejectUnauthorized: false
+  }
 });
 
-const SENDER = { name: "QualiFresh", email: "qualifresh.orders@gmail.com" };
+// import nodemailer from "nodemailer";
+// import SMTPTransport from "nodemailer/lib/smtp-transport";
 
-// Small helper so every function below stays a one-liner instead of
-// repeating the same boilerplate each time.
-async function sendEmail(opts: {
-  to: { email: string; name?: string }[];
-  subject: string;
-  html: string;
-  replyTo?: string;
-}) {
-  await brevo.transactionalEmails.sendTransacEmail({
-    sender: SENDER,
-    to: opts.to,
-    subject: opts.subject,
-    htmlContent: opts.html,
-    ...(opts.replyTo ? { replyTo: { email: opts.replyTo } } : {}),
-  });
-}
+// const transporter = nodemailer.createTransport({
+//   host: process.env.EMAIL_HOST || "smtp.gmail.com",
+//   port: Number(process.env.EMAIL_PORT) || 587,
+//   secure: false, // REQUIRED for port 587
+//   auth: {
+//     user: process.env.EMAIL_USER,
+//     pass: process.env.EMAIL_PASS,
+//   },
+//    tls: {
+//     rejectUnauthorized: false, // ALWAYS include this on Render
+//   },
+//   family: 4, // FORCE IPv4 (helps with some connection issues)
+// } as SMTPTransport.Options);
+
 
 export async function sendOrderConfirmation(
   to: string,
@@ -100,8 +109,9 @@ export async function sendOrderConfirmation(
       </div>
     </div>`;
 
-  await sendEmail({
-    to: [{ email: to, name }],
+  await transporter.sendMail({
+    from: `"QualiFresh" <${process.env.EMAIL_USER}>`,
+    to,
     subject: `Order Confirmed: #${order.orderNumber} — QualiFresh`,
     html,
   });
@@ -136,8 +146,9 @@ export async function sendAdminOrderNotification(order: {
       <h3>Total: ₹${order.total}</h3>
     </div>`;
 
-  await sendEmail({
-    to: [{ email: process.env.ADMIN_EMAIL || "rohit@qualifresh.in" }],
+  await transporter.sendMail({
+    from: `"QualiFresh Orders" <${process.env.EMAIL_USER}>`,
+    to: process.env.ADMIN_EMAIL || "rohit@qualifresh.in",
     subject: `🛒 New Order #${order.orderNumber} — ₹${order.total}`,
     html,
   });
@@ -183,8 +194,9 @@ export async function sendOrderStatusUpdate(
       </div>
     </div>`;
 
-  await sendEmail({
-    to: [{ email: to, name }],
+  await transporter.sendMail({
+    from: `"QualiFresh" <${process.env.EMAIL_USER}>`,
+    to,
     subject: `Order #${order.orderNumber} — ${statusLabel} | QualiFresh`,
     html,
   });
@@ -206,10 +218,11 @@ export async function sendContactEmail(data: {
       <p style="background:#f9fafb;padding:14px;border-radius:6px;white-space:pre-wrap">${data.message}</p>
     </div>`;
 
-  await sendEmail({
-    to: [{ email: process.env.ADMIN_EMAIL || "rohit@qualifresh.in" }],
+  await transporter.sendMail({
+    from: `"QualiFresh Contact" <${process.env.EMAIL_USER}>`,
+    to: process.env.ADMIN_EMAIL || "rohit@qualifresh.in",
+    replyTo: data.email,
     subject: `Contact Form: ${data.name} — QualiFresh`,
     html,
-    replyTo: data.email,
   });
 }

@@ -11,6 +11,7 @@
     "migrate:cloudinary": "ts-node-dev --transpile-only src/scripts/migrate-to-cloudinary.ts"
   },
   "dependencies": {
+    "@getbrevo/brevo": "^6.0.2",
     "@supabase/supabase-js": "^2.103.2",
     "bcryptjs": "^2.4.3",
     "cloudinary": "^1.41.3",
