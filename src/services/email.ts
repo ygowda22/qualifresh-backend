@@ -95,7 +95,7 @@ export async function sendOrderConfirmation(
         </div>
 
         <p style="margin-top:24px;color:#6b7280;font-size:12px;text-align:center">
-          Questions? WhatsApp us or email <a href="mailto:rohit@qualifresh.in" style="color:#2d8a4e">rohit@qualifresh.in</a>
+          Questions? WhatsApp us or email <a href="mailto:qualifresh.orders@gmail.com" style="color:#2d8a4e">qualifresh.orders@gmail.com</a>
         </p>
       </div>
     </div>`;
@@ -137,7 +137,7 @@ export async function sendAdminOrderNotification(order: {
     </div>`;
 
   await sendEmail({
-    to: [{ email: process.env.ADMIN_EMAIL || "rohit@qualifresh.in" }],
+    to: [{ email: process.env.ADMIN_EMAIL || "qualifresh.orders@gmail.com" }],
     subject: `🛒 New Order #${order.orderNumber} — ₹${order.total}`,
     html,
   });
@@ -178,7 +178,7 @@ export async function sendOrderStatusUpdate(
           <div style="font-size:13px;color:#4b7c5e;margin-top:4px">Order total: <strong>₹${order.total}</strong></div>
         </div>
         <p style="color:#6b7280;font-size:13px">
-          Questions? WhatsApp us or email <a href="mailto:rohit@qualifresh.in" style="color:#2d8a4e">rohit@qualifresh.in</a>
+          Questions? WhatsApp us or email <a href="mailto:qualifresh.orders@gmail.com" style="color:#2d8a4e">qualifresh.orders@gmail.com</a>
         </p>
       </div>
     </div>`;
@@ -207,7 +207,7 @@ export async function sendContactEmail(data: {
     </div>`;
 
   await sendEmail({
-    to: [{ email: process.env.ADMIN_EMAIL || "rohit@qualifresh.in" }],
+    to: [{ email: process.env.ADMIN_EMAIL || "qualifresh.orders@gmail.com" }],
     subject: `Contact Form: ${data.name} — QualiFresh`,
     html,
     replyTo: data.email,
