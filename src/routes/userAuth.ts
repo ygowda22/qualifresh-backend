@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { User } from "../models/User";
 import { Product } from "../models/Product";
+import { Address } from "../models/Address";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
 import jwt from "jsonwebtoken";
 
@@ -61,6 +62,17 @@ router.post("/login", async (req, res) => {
   }
 });
 
+// GET /api/users/profile  (authenticated)
+router.get("/profile", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const user = await User.findById(req.user!.id).select("-password");
+    if (!user) return res.status(404).json({ message: "User not found" });
+    res.json({ user: { id: user._id, name: user.name, email: user.email, phone: user.phone, createdAt: (user as any).createdAt } });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch profile" });
+  }
+});
+
 // PUT /api/users/profile  (authenticated)
 router.put("/profile", authMiddleware, async (req: AuthRequest, res) => {
   try {
@@ -100,6 +112,14 @@ router.put("/cart", authMiddleware, async (req: AuthRequest, res) => {
       const q = Math.floor(Number(v));
       if (q > 0) cleaned[k] = q;
     });
+
+    // Validate stock — never persist an out-of-stock product into the saved cart
+    const ids = Object.keys(cleaned);
+    if (ids.length) {
+      const outOfStock = await Product.find({ _id: { $in: ids }, stock: 0 }).select("_id");
+      outOfStock.forEach(p => { delete cleaned[String(p._id)]; });
+    }
+
     await User.findByIdAndUpdate(req.user!.id, { $set: { cart: cleaned } });
     res.json({ ok: true });
   } catch (err) {
@@ -148,6 +168,59 @@ router.delete("/wishlist/:productId", authMiddleware, async (req: AuthRequest, r
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ message: "Failed to remove from wishlist" });
+  }
+});
+
+// GET /api/users/addresses — list current user's saved addresses
+router.get("/addresses", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const addresses = await Address.find({ userId: req.user!.id }).sort({ createdAt: 1 });
+    res.json({ addresses });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch addresses" });
+  }
+});
+
+// POST /api/users/addresses — add a new address, linked to the logged-in user
+router.post("/addresses", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const { label, line1, city, pincode } = req.body;
+    if (!line1 || !city) return res.status(400).json({ message: "Address line and city are required" });
+    const address = await Address.create({ userId: req.user!.id, label: label || "Home", line1, city, pincode });
+    res.status(201).json({ address });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to save address" });
+  }
+});
+
+// PUT /api/users/addresses/:id — update a saved address (only if it belongs to this user)
+router.put("/addresses/:id", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const { label, line1, city, pincode } = req.body;
+    const address = await Address.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user!.id },
+      {
+        ...(label !== undefined ? { label } : {}),
+        ...(line1 !== undefined ? { line1 } : {}),
+        ...(city !== undefined ? { city } : {}),
+        ...(pincode !== undefined ? { pincode } : {}),
+      },
+      { new: true }
+    );
+    if (!address) return res.status(404).json({ message: "Address not found" });
+    res.json({ address });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to update address" });
+  }
+});
+
+// DELETE /api/users/addresses/:id — remove a saved address (only if it belongs to this user)
+router.delete("/addresses/:id", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    await Address.findOneAndDelete({ _id: req.params.id, userId: req.user!.id });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to delete address" });
   }
 });
 

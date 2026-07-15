@@ -4,11 +4,13 @@ import { BrevoClient } from "@getbrevo/brevo";
 // when @types/node isn't installed in the environment.
 declare const process: { env: { [key: string]: string | undefined } };
 
+//the connection setup
 const brevo = new BrevoClient({
   apiKey: process.env.BREVO_API_KEY || "",
 });
 
-const SENDER = { name: "QualiFresh", email: "qualifresh.orders@gmail.com" };
+//This is the "From" address every email uses — customers see "QualiFresh rohit@qualifresh.in" in their inbox.
+const SENDER = { name: "QualiFresh", email: "rohit@qualifresh.in" };
 
 // Small helper so every function below stays a one-liner instead of
 // repeating the same boilerplate each time.
@@ -27,6 +29,7 @@ async function sendEmail(opts: {
   });
 }
 
+//sent to the customer right after they place an order. Shows their items, prices, delivery slot, and address in a styled HTML card. Called from wherever your checkout/order logic lives.
 export async function sendOrderConfirmation(
   to: string,
   name: string,
@@ -95,7 +98,7 @@ export async function sendOrderConfirmation(
         </div>
 
         <p style="margin-top:24px;color:#6b7280;font-size:12px;text-align:center">
-          Questions? WhatsApp us or email <a href="mailto:qualifresh.orders@gmail.com" style="color:#2d8a4e">qualifresh.orders@gmail.com</a>
+          Questions? WhatsApp us or email <a href="mailto:rohit@qualifresh.in" style="color:#2d8a4e">rohit@qualifresh.in</a>
         </p>
       </div>
     </div>`;
@@ -107,6 +110,7 @@ export async function sendOrderConfirmation(
   });
 }
 
+// sent to you (currently rohit@qualifresh.in after your edit) whenever a new order comes in, so you know to prepare it
 export async function sendAdminOrderNotification(order: {
   orderNumber: string;
   customerName: string;
@@ -137,12 +141,16 @@ export async function sendAdminOrderNotification(order: {
     </div>`;
 
   await sendEmail({
-    to: [{ email: process.env.ADMIN_EMAIL || "qualifresh.orders@gmail.com" }],
+     to: [
+      // { email: "qualifresh.orders@gmail.com" },
+      { email: "rohit@qualifresh.in" }
+    ],
     subject: `🛒 New Order #${order.orderNumber} — ₹${order.total}`,
     html,
   });
 }
 
+//sent to the customer when their order status changes (confirmed → out for delivery → delivered, etc.)
 export async function sendOrderStatusUpdate(
   to: string,
   name: string,
@@ -178,7 +186,7 @@ export async function sendOrderStatusUpdate(
           <div style="font-size:13px;color:#4b7c5e;margin-top:4px">Order total: <strong>₹${order.total}</strong></div>
         </div>
         <p style="color:#6b7280;font-size:13px">
-          Questions? WhatsApp us or email <a href="mailto:qualifresh.orders@gmail.com" style="color:#2d8a4e">qualifresh.orders@gmail.com</a>
+          Questions? WhatsApp us or email <a href="mailto:rohit@qualifresh.in" style="color:#2d8a4e">rohit@qualifresh.in</a>
         </p>
       </div>
     </div>`;
@@ -190,6 +198,7 @@ export async function sendOrderStatusUpdate(
   });
 }
 
+//sent to you(rohit@qualifresh.in) when someone submits your website's contact form
 export async function sendContactEmail(data: {
   name: string;
   email: string;
@@ -207,7 +216,10 @@ export async function sendContactEmail(data: {
     </div>`;
 
   await sendEmail({
-    to: [{ email: process.env.ADMIN_EMAIL || "qualifresh.orders@gmail.com" }],
+      to: [
+      // { email: "qualifresh.orders@gmail.com" },
+      { email: "rohit@qualifresh.in" }
+    ],
     subject: `Contact Form: ${data.name} — QualiFresh`,
     html,
     replyTo: data.email,
