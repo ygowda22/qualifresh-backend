@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { Order } from "../models/Order";
 import { Product } from "../models/Product";
+import { User } from "../models/User";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
 import { sendOrderConfirmation, sendAdminOrderNotification, sendOrderStatusUpdate } from "../services/email";
 
@@ -12,7 +13,7 @@ router.post("/", async (req, res) => {
     const {
       items, subtotal, deliveryCharge, total,
       deliveryAddress, city, deliverySlot, notes,
-      guestName, guestEmail, guestPhone, userId,
+      guestName, guestEmail, guestPhone, userId, source,
     } = req.body;
 
     if (!items?.length || !deliveryAddress || !deliverySlot)
@@ -33,12 +34,24 @@ router.post("/", async (req, res) => {
       guestPhone:     userId ? undefined : guestPhone,
       items, subtotal, deliveryCharge, total,
       deliveryAddress, city: city || "Pune", deliverySlot, notes,
+      source: source === "whatsapp" ? "whatsapp" : "website",
     });
 
-    // Send emails (non-blocking)
-    const customerEmail = guestEmail || "";
-    const customerName  = guestName  || "Customer";
-    const customerPhone = guestPhone || "";
+    // Send emails (non-blocking). For a logged-in order, always use the account's own
+    // identity — never the (possibly stale or blank) guest form fields — so the confirmation
+    // email is never skipped or sent to the wrong address for logged-in customers.
+    let customerEmail = guestEmail || "";
+    let customerName  = guestName  || "Customer";
+    let customerPhone = guestPhone || "";
+
+    if (userId) {
+      const account = await User.findById(userId).select("name email phone");
+      if (account) {
+        customerEmail = account.email;
+        customerName  = account.name;
+        customerPhone = account.phone;
+      }
+    }
 
     if (customerEmail) {
       sendOrderConfirmation(customerEmail, customerName, {

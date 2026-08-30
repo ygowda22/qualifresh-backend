@@ -7,11 +7,13 @@ import productsRouter  from "./routes/products";
 import authRouter      from "./routes/auth";
 import userAuthRouter  from "./routes/userAuth";
 import ordersRouter    from "./routes/orders";
+import whatsappOrderRouter from "./routes/whatsappOrder";
 import contactRouter   from "./routes/contact";
 import uploadRouter    from "./routes/upload";
 import adminUsersRouter from "./routes/adminUsers";
 import farmsRouter      from "./routes/farms";
 import categoriesRouter from "./routes/categories";
+import testimonialsRouter from "./routes/testimonials";
 
 const app = express();
 
@@ -39,11 +41,13 @@ app.use("/api/products",    productsRouter);
 app.use("/api/auth",        authRouter);       // admin auth
 app.use("/api/users",       userAuthRouter);   // customer auth
 app.use("/api/orders",      ordersRouter);
+app.use("/api/whatsapp-order", whatsappOrderRouter);
 app.use("/api/contact",     contactRouter);
 app.use("/api/upload",      uploadRouter);
 app.use("/api/admin/users", adminUsersRouter);
 app.use("/api/farms",      farmsRouter);
 app.use("/api/categories", categoriesRouter);
+app.use("/api/testimonials", testimonialsRouter);
 
 const PORT = process.env.PORT || 4000;
 
