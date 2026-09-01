@@ -16,7 +16,7 @@ router.post("/", async (req, res) => {
       name, phone, email, userId,
     } = req.body;
 
-    if (!items?.length || !address || !deliverySlot || !name || !phone)
+    if (!items?.length || !deliverySlot || !name || !phone || !city)
       return res.status(400).json({ message: "Missing required fields" });
 
     const productIds = items.map((i: { productId: string }) => i.productId).filter(Boolean);
@@ -33,14 +33,19 @@ router.post("/", async (req, res) => {
       guestEmail:  userId ? undefined : email,
       guestPhone:  userId ? undefined : phone,
       items, subtotal, deliveryCharge, total,
-      deliveryAddress: address, city: city || "Pune", deliverySlot, notes,
+      // deliveryAddress is required at the schema level (shared with email orders) —
+      // WhatsApp orders may omit it, so fall back to a placeholder rather than failing.
+      deliveryAddress: address && String(address).trim() ? address : "Not provided",
+      city, deliverySlot, notes,
       source: "whatsapp",
     });
 
     const waMessage = "Hi QualiFresh! I'd like to order:\n" +
       items.map((i: { name: string; quantity: number; price: number }) => `• ${i.name} ×${i.quantity} — ₹${i.price * i.quantity}`).join("\n") +
       `\n\nTotal: ₹${total}` +
-      `\n\nOrder: ${order.orderNumber}\nName: ${name}\nPhone: ${phone}\nAddress: ${address}${city ? ", " + city : ""}\nDelivery Slot: ${deliverySlot}`;
+      `\n\nOrder: ${order.orderNumber}\nName: ${name}\nPhone: ${phone}` +
+      (address && String(address).trim() ? `\nAddress: ${address}, ${city}` : `\nCity: ${city}`) +
+      `\nDelivery Slot: ${deliverySlot}`;
     const whatsappMessageUrl = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(waMessage)}`;
 
     res.status(201).json({ orderId: order._id, orderNumber: order.orderNumber, whatsappMessageUrl });
