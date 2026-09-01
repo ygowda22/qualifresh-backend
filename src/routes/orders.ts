@@ -1,4 +1,5 @@
 import { Router } from "express";
+import mongoose from "mongoose";
 import { Order } from "../models/Order";
 import { Product } from "../models/Product";
 import { User } from "../models/User";
@@ -131,6 +132,27 @@ router.delete("/:id", authMiddleware, async (req, res) => {
   try {
     const order = await Order.findByIdAndDelete(req.params.id);
     if (!order) return res.status(404).json({ message: "Order not found" });
+
+    // Recalculate the order-number counter from what's left after this deletion, so the
+    // next order continues from the highest remaining number instead of leaving a gap.
+    // Only runs here — normal order placement (email/WhatsApp) still uses the atomic
+    // counter increment in Order.ts untouched.
+    const remaining = await Order.find({}).select("orderNumber").lean();
+    let highest = 0;
+    for (const o of remaining) {
+      const m = /^QF-(\d+)$/.exec((o as { orderNumber?: string }).orderNumber || "");
+      if (m) {
+        const n = parseInt(m[1], 10);
+        if (n > highest) highest = n;
+      }
+    }
+    const db = mongoose.connection.db!;
+    await db.collection<{ _id: string; seq: number }>("counters").updateOne(
+      { _id: "orderNumber" },
+      { $set: { seq: highest } },
+      { upsert: true }
+    );
+
     res.json({ message: "Order deleted" });
   } catch (err) {
     res.status(500).json({ message: "Failed to delete order" });
