@@ -1,27 +1,11 @@
 import { Router } from "express";
 import multer from "multer";
-import { v2 as cloudinary } from "cloudinary";
 import { FarmPhoto } from "../models/FarmPhoto";
 import { authMiddleware } from "../middleware/auth";
-
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key:    process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
+import { storeImage } from "../services/imageStorage";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
-function streamUpload(buffer: Buffer, options: object): Promise<{ secure_url: string; public_id: string }> {
-  return new Promise((resolve, reject) => {
-    cloudinary.uploader
-      .upload_stream(options, (error, result) => {
-        if (error || !result) reject(error ?? new Error("No result from Cloudinary"));
-        else resolve(result as { secure_url: string; public_id: string });
-      })
-      .end(buffer);
-  });
-}
 
 const router = Router();
 
@@ -36,17 +20,13 @@ router.get("/", async (_req, res) => {
   }
 });
 
-// Admin: POST /api/farms/upload — Cloudinary upload + MongoDB save in one step
+// Admin: POST /api/farms/upload — image upload + MongoDB save in one step
 router.post("/upload", authMiddleware, upload.single("image"), async (req, res) => {
   if (!req.file) return res.status(400).json({ message: "No image file provided" });
   try {
     const { title = "", description = "", id } = req.body;
-    const result = await streamUpload(req.file.buffer, {
-      folder:        "qualifresh-farms",
-      public_id:     `farm-${Date.now()}`,
-      resource_type: "image",
-    });
-    const imageUrl = result.secure_url;
+    const result = await storeImage(req.file.buffer, "qualifresh-farms", `farm-${Date.now()}`);
+    const imageUrl = result.url;
     let photo;
     if (id) {
       photo = await FarmPhoto.findByIdAndUpdate(

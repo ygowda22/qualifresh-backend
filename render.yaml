@@ -25,3 +25,11 @@ services:
         sync: false
       - key: EMAIL_PASS
         sync: false
+      # Image storage: leave unset (= cloudinary) until the GCS bucket exists
+      # and the migration script has run, then set to "gcs" in the Render dashboard.
+      - key: STORAGE_PROVIDER
+        sync: false
+      - key: GCS_BUCKET
+        sync: false
+      - key: GCP_SA_KEY_B64
+        sync: false

@@ -8,10 +8,12 @@
     "start": "node dist/server.js",
     "seed": "ts-node-dev --transpile-only src/seed/seed.ts",
     "migrate:images": "ts-node-dev --transpile-only src/scripts/migrate-image-urls.ts",
-    "migrate:cloudinary": "ts-node-dev --transpile-only src/scripts/migrate-to-cloudinary.ts"
+    "migrate:cloudinary": "ts-node-dev --transpile-only src/scripts/migrate-to-cloudinary.ts",
+    "migrate:gcs": "ts-node-dev --transpile-only src/scripts/migrate-cloudinary-to-gcs.ts"
   },
   "dependencies": {
     "@getbrevo/brevo": "^6.0.2",
+    "@google-cloud/storage": "^9.0.0",
     "@supabase/supabase-js": "^2.103.2",
     "bcryptjs": "^2.4.3",
     "cloudinary": "^1.41.3",
@@ -22,7 +24,8 @@
     "mongoose": "^8.3.0",
     "multer": "^2.1.1",
     "multer-storage-cloudinary": "^4.0.0",
-    "nodemailer": "^8.0.4"
+    "nodemailer": "^8.0.4",
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.2",
