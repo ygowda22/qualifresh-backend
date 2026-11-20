@@ -50,11 +50,28 @@ router.post("/", authMiddleware, upload.single("image"), async (req: Request, re
       : path.basename(req.file.originalname, ext).replace(/\s+/g, "-").toLowerCase();
     const folder   = (req.body.folder as string) || "qualifresh-products";
 
-    const result = await streamUpload(req.file.buffer, {
-      folder,
-      public_id:     `${baseName}-${Date.now()}`,
-      resource_type: "image",
-    });
+    // Product images get a deterministic public_id keyed by slug so re-uploading
+    // (edit) overwrites the same Cloudinary asset in place instead of creating a
+    // new one and orphaning the old one. Requires an actual slug (not the
+    // filename fallback) — two products could otherwise share a filename like
+    // "photo.jpg" and silently overwrite each other's image.
+    const isProductUpload = folder === "qualifresh-products" && !!slug;
+    const uploadOptions: Record<string, unknown> = isProductUpload
+      ? {
+          folder,
+          public_id:     baseName,
+          overwrite:     true,
+          invalidate:    true,
+          resource_type: "image",
+          transformation: [{ width: 1600, crop: "limit", quality: "auto", fetch_format: "auto" }],
+        }
+      : {
+          folder,
+          public_id:     `${baseName}-${Date.now()}`,
+          resource_type: "image",
+        };
+
+    const result = await streamUpload(req.file.buffer, uploadOptions);
 
     return res.json({ url: result.secure_url, filename: result.public_id });
   } catch (err) {

@@ -1,6 +1,13 @@
 import { Router } from "express";
+import { v2 as cloudinary } from "cloudinary";
 import { Product } from "../models/Product";
 import { authMiddleware } from "../middleware/auth";
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key:    process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 const router = Router();
 
@@ -74,6 +81,13 @@ router.delete("/:id", authMiddleware, async (req, res) => {
   try {
     const product = await Product.findByIdAndDelete(req.params.id);
     if (!product) return res.status(404).json({ message: "Not found" });
+    if (product.imagePublicId) {
+      try {
+        await cloudinary.uploader.destroy(product.imagePublicId, { invalidate: true, resource_type: "image" });
+      } catch (err) {
+        console.error("Cloudinary destroy error (non-fatal):", err);
+      }
+    }
     res.json({ message: "Deleted" });
   } catch (err) {
     console.error(err);

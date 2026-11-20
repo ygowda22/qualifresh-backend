@@ -3,3 +3,7 @@ dist/
 uploads/
 *.env
 .env
+
+# Output of src/scripts/delete-orphan-images.ts (run logs, not source)
+src/scripts/orphans.json
+src/scripts/deletion-log.json
