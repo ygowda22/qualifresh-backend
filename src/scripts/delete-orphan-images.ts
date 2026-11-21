@@ -9,8 +9,21 @@
  * UI, no product data. Only ever deletes Cloudinary assets confirmed
  * unreferenced, and only when --confirm is passed.
  *
- * Usage:
+ * Since the unique-name upload policy, replaced/removed images are deleted by the
+ * save routes (services/imageCleanup.ts). What is left for this script: uploads
+ * that were cancelled before saving, and failed cleanups.
+ *
+ * "Referenced" means used by ANY document: products (imageUrl, imagePublicId,
+ * images[]), categories, farm photos, testimonials (avatarUrl, images[].url), and
+ * the GCS-migration rollback log (image_migrations.before) — so rollback
+ * originals are never treated as orphans. URLs are parsed with the app's own
+ * parser: .png/.jpg/.webp, version and transformation segments, ?query.
+ * GCS URLs are recognised and counted, but this script only lists/deletes
+ * Cloudinary assets.
+ *
+ * Usage (dry run is the DEFAULT — nothing is deleted without --confirm):
  *   npx ts-node src/scripts/delete-orphan-images.ts             (dry run — writes orphans.json, deletes nothing)
+ *   npx ts-node src/scripts/delete-orphan-images.ts --dry-run   (same, explicit)
  *   npx ts-node src/scripts/delete-orphan-images.ts --confirm   (deletes the orphans listed in the dry run, in batches, with an audit log)
  *
  * Output:
@@ -23,6 +36,7 @@ import fs from "fs";
 import path from "path";
 import mongoose from "mongoose";
 import { v2 as cloudinary } from "cloudinary";
+import { parseImageUrl } from "../services/imageStorage";
 
 const MONGO_URI = process.env.MONGO_URI;
 if (!MONGO_URI) { console.error("✗ MONGO_URI not set in .env"); process.exit(1); }
@@ -38,7 +52,12 @@ cloudinary.config({
 });
 
 const PREFIX       = "qualifresh-products/"; // actual Cloudinary folder used by the product-upload route; adjust if it changes
-const CONFIRM       = process.argv.includes("--confirm");
+const DRY_RUN_FLAG  = process.argv.includes("--dry-run");
+if (DRY_RUN_FLAG && process.argv.includes("--confirm")) {
+  console.error("✗ Both --dry-run and --confirm passed — refusing. Pass only --confirm to delete.");
+  process.exit(1);
+}
+const CONFIRM       = process.argv.includes("--confirm") && !DRY_RUN_FLAG;
 const BATCH_SIZE     = 100;
 const BATCH_PAUSE_MS = 500;
 
@@ -46,47 +65,49 @@ const OUT_DIR          = __dirname;
 const ORPHANS_FILE     = path.join(OUT_DIR, "orphans.json");
 const DELETION_LOG_FILE = path.join(OUT_DIR, "deletion-log.json");
 
-// Minimal read-only Mongoose model — matches the real "products" collection
-// without needing the full app schema.
-const ProductSchema = new mongoose.Schema(
-  { name: String, slug: String, imageUrl: String, imagePublicId: String, images: [String] },
-  { strict: false, collection: "products" }
-);
-const Product = mongoose.model("Product", ProductSchema);
+// Every place an image URL can be stored (read-only, raw collections — no app schema needed).
+const URL_FIELDS: { coll: string; fields: string[] }[] = [
+  { coll: "products",         fields: ["imageUrl", "images"] },
+  { coll: "categories",       fields: ["imageUrl"] },
+  { coll: "farmphotos",       fields: ["imageUrl"] },
+  { coll: "testimonials",     fields: ["avatarUrl", "images"] },
+  { coll: "image_migrations", fields: ["before", "after"] }, // GCS migration rollback log
+];
 
 function sleep(ms: number) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
-// Derive a Cloudinary public_id (folder/name, no extension) from a delivery
-// URL — for records that only stored imageUrl, not imagePublicId, and for
-// entries in the images[] gallery array (which never had a public_id field).
-function publicIdFromUrl(url: string): string | null {
-  if (typeof url !== "string" || !url.includes("/upload/")) return null;
-  const m = url.match(/\/upload\/(?:[a-z]{1,3}_[^/]+\/)*(?:v\d+\/)?(.+?)(?:\.[a-zA-Z0-9]+)?(?:\?.*)?$/);
-  return m ? m[1] : null;
+/** Strings found in a field value: "url", ["url"], [{ url }]. */
+function urlsIn(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(v => typeof v === "string" ? [v] : (v && typeof (v as any).url === "string" ? [(v as any).url] : []));
+  return [];
 }
 
-async function getReferencedPublicIds(): Promise<Set<string>> {
-  const referenced = new Set<string>();
-  const products = await Product.find(
-    {},
-    { _id: 1, name: 1, slug: 1, imageUrl: 1, imagePublicId: 1, images: 1 }
-  ).lean();
+type RefStats = { cloudinary: number; gcs: number; other: number };
 
-  for (const raw of products) {
-    const p = raw as any;
-    if (p.imagePublicId) referenced.add(p.imagePublicId);
-    if (p.imageUrl) {
-      const pid = publicIdFromUrl(p.imageUrl);
-      if (pid) referenced.add(pid);
-    }
-    if (Array.isArray(p.images)) {
-      for (const url of p.images) {
-        const pid = publicIdFromUrl(url);
-        if (pid) referenced.add(pid);
+async function getReferencedPublicIds(): Promise<{ referenced: Set<string>; stats: RefStats }> {
+  const referenced = new Set<string>();
+  const stats: RefStats = { cloudinary: 0, gcs: 0, other: 0 };
+  const db = mongoose.connection.db!;
+  const existing = new Set((await db.listCollections({}, { nameOnly: true }).toArray()).map(c => c.name));
+
+  for (const { coll, fields } of URL_FIELDS) {
+    if (!existing.has(coll)) continue;
+    const projection = Object.fromEntries([...fields, "imagePublicId"].map(f => [f, 1]));
+    const docs = await db.collection(coll).find({}, { projection }).toArray();
+    for (const d of docs) {
+      if (coll === "products" && typeof d.imagePublicId === "string" && d.imagePublicId) referenced.add(d.imagePublicId);
+      for (const f of fields) {
+        for (const url of urlsIn(d[f])) {
+          const parsed = parseImageUrl(url);
+          if (parsed?.provider === "cloudinary") { referenced.add(parsed.publicId); stats.cloudinary++; }
+          else if (parsed?.provider === "gcs") stats.gcs++;
+          else stats.other++;
+        }
       }
     }
   }
-  return referenced;
+  return { referenced, stats };
 }
 
 async function listAllAssetsUnderPrefix(): Promise<{ public_id: string; bytes: number }[]> {
@@ -114,9 +135,10 @@ async function run() {
   await mongoose.connect(MONGO_URI!);
   console.log("Connected.\n");
 
-  console.log("Gathering referenced image public_ids from MongoDB…");
-  const referenced = await getReferencedPublicIds();
-  console.log(`Referenced public_ids: ${referenced.size}\n`);
+  console.log("Gathering referenced images from MongoDB (products, categories, farmphotos, testimonials, image_migrations)…");
+  const { referenced, stats } = await getReferencedPublicIds();
+  console.log(`Referenced Cloudinary public_ids: ${referenced.size}`);
+  console.log(`URL references — Cloudinary: ${stats.cloudinary}, GCS: ${stats.gcs} (not Cloudinary assets, ignored), other/local: ${stats.other}\n`);
 
   // Safety: an empty referenced set almost certainly means the DB query
   // failed or returned nothing — never treat that as "everything is an
