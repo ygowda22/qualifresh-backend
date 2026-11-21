@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { Product } from "../models/Product";
 import { authMiddleware } from "../middleware/auth";
+import { cleanupImagesLater, imageUrlsOf } from "../services/imageCleanup";
 
 const router = Router();
 
@@ -58,11 +59,13 @@ router.post("/", authMiddleware, async (req, res) => {
 // Admin: PUT /api/products/:id
 router.put("/:id", authMiddleware, async (req, res) => {
   try {
-    const product = await Product.findByIdAndUpdate(req.params.id, req.body, {
-      new: true
-    });
-    if (!product) return res.status(404).json({ message: "Not found" });
-    res.json(product);
+    const before = await Product.findById(req.params.id).lean();
+    if (!before) return res.status(404).json({ message: "Not found" });
+    const updated = await Product.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    if (!updated) return res.status(404).json({ message: "Not found" });
+    res.json(updated);
+    // After the save: remove replaced/removed images (imageUrl + images[]) unless still used anywhere.
+    cleanupImagesLater(imageUrlsOf(before), `product ${updated._id} update`);
   } catch (err) {
     console.error(err);
     res.status(400).json({ message: "Failed to update product" });
@@ -75,6 +78,7 @@ router.delete("/:id", authMiddleware, async (req, res) => {
     const product = await Product.findByIdAndDelete(req.params.id);
     if (!product) return res.status(404).json({ message: "Not found" });
     res.json({ message: "Deleted" });
+    cleanupImagesLater(imageUrlsOf(product), `product ${product._id} delete`);
   } catch (err) {
     console.error(err);
     res.status(400).json({ message: "Failed to delete product" });

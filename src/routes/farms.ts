@@ -1,27 +1,10 @@
 import { Router } from "express";
-import multer from "multer";
-import { v2 as cloudinary } from "cloudinary";
 import { FarmPhoto } from "../models/FarmPhoto";
 import { authMiddleware } from "../middleware/auth";
+import { singleImage } from "../middleware/imageUpload";
+import { storeImage, InvalidImageError } from "../services/imageStorage";
+import { cleanupImagesLater, imageUrlsOf } from "../services/imageCleanup";
 
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key:    process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
-
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
-
-function streamUpload(buffer: Buffer, options: object): Promise<{ secure_url: string; public_id: string }> {
-  return new Promise((resolve, reject) => {
-    cloudinary.uploader
-      .upload_stream(options, (error, result) => {
-        if (error || !result) reject(error ?? new Error("No result from Cloudinary"));
-        else resolve(result as { secure_url: string; public_id: string });
-      })
-      .end(buffer);
-  });
-}
 
 const router = Router();
 
@@ -36,19 +19,18 @@ router.get("/", async (_req, res) => {
   }
 });
 
-// Admin: POST /api/farms/upload — Cloudinary upload + MongoDB save in one step
-router.post("/upload", authMiddleware, upload.single("image"), async (req, res) => {
+// Admin: POST /api/farms/upload — image upload + MongoDB save in one step
+router.post("/upload", authMiddleware, singleImage(), async (req, res) => {
   if (!req.file) return res.status(400).json({ message: "No image file provided" });
   try {
     const { title = "", description = "", id } = req.body;
-    const result = await streamUpload(req.file.buffer, {
-      folder:        "qualifresh-farms",
-      public_id:     `farm-${Date.now()}`,
-      resource_type: "image",
-    });
-    const imageUrl = result.secure_url;
+    const result = await storeImage(req.file.buffer, "qualifresh-farms", "farm");
+    const imageUrl = result.url;
     let photo;
+    let before = null;
     if (id) {
+      // This route also saves the farm photo, so it is where the old image is released.
+      before = await FarmPhoto.findById(id).lean();
       photo = await FarmPhoto.findByIdAndUpdate(
         id,
         { title, description, imageUrl },
@@ -59,7 +41,9 @@ router.post("/upload", authMiddleware, upload.single("image"), async (req, res) 
       photo = await FarmPhoto.create({ title, description, imageUrl });
     }
     res.status(201).json(photo);
+    cleanupImagesLater(imageUrlsOf(before), `farm photo ${photo._id} image upload`);
   } catch (err) {
+    if (err instanceof InvalidImageError) return res.status(400).json({ message: err.message });
     console.error("Farm upload error:", err);
     res.status(500).json({ message: "Upload failed" });
   }
@@ -82,6 +66,7 @@ router.post("/", authMiddleware, async (req, res) => {
 router.put("/:id", authMiddleware, async (req, res) => {
   try {
     const { title, description, imageUrl, order } = req.body;
+    const before = await FarmPhoto.findById(req.params.id).lean();
     const photo = await FarmPhoto.findByIdAndUpdate(
       req.params.id,
       { title, description, imageUrl, order },
@@ -89,6 +74,7 @@ router.put("/:id", authMiddleware, async (req, res) => {
     );
     if (!photo) return res.status(404).json({ message: "Not found" });
     res.json(photo);
+    cleanupImagesLater(imageUrlsOf(before), `farm photo ${photo._id} update`);
   } catch (err) {
     console.error(err);
     res.status(400).json({ message: "Failed to update farm photo" });
@@ -101,6 +87,7 @@ router.delete("/:id", authMiddleware, async (req, res) => {
     const photo = await FarmPhoto.findByIdAndDelete(req.params.id);
     if (!photo) return res.status(404).json({ message: "Not found" });
     res.json({ message: "Deleted" });
+    cleanupImagesLater(imageUrlsOf(photo), `farm photo ${photo._id} delete`);
   } catch (err) {
     console.error(err);
     res.status(400).json({ message: "Failed to delete farm photo" });

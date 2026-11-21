@@ -15,6 +15,7 @@ export interface IProduct extends Document {
   tags: string[];
   images: string[];
   imageUrl: string;
+  imagePublicId: string;
 }
 
 const ProductSchema = new Schema<IProduct>(
@@ -32,7 +33,8 @@ const ProductSchema = new Schema<IProduct>(
     stock: { type: Number, default: 0 },
     tags: [{ type: String }],
     images: [{ type: String }],
-    imageUrl: { type: String, default: "" }
+    imageUrl: { type: String, default: "" },
+    imagePublicId: { type: String, default: "" }
   },
   { timestamps: true }
 );

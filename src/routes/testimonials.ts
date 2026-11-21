@@ -2,6 +2,7 @@ import { Router } from "express";
 import { Testimonial } from "../models/Testimonial";
 import { authMiddleware } from "../middleware/auth";
 import { sanitizeText } from "../utils/sanitize";
+import { cleanupImagesLater, imageUrlsOf } from "../services/imageCleanup";
 
 const router = Router();
 
@@ -74,9 +75,11 @@ router.put("/:id", authMiddleware, async (req, res) => {
     if (!body.name || !body.message) {
       return res.status(400).json({ message: "name and message are required" });
     }
+    const before = await Testimonial.findById(req.params.id).lean();
     const item = await Testimonial.findByIdAndUpdate(req.params.id, body, { new: true });
     if (!item) return res.status(404).json({ message: "Not found" });
     res.json(item);
+    cleanupImagesLater(imageUrlsOf(before), `testimonial ${item._id} update`);
   } catch (err) {
     console.error(err);
     res.status(400).json({ message: "Failed to update testimonial" });
@@ -89,6 +92,7 @@ router.delete("/:id", authMiddleware, async (req, res) => {
     const item = await Testimonial.findByIdAndDelete(req.params.id);
     if (!item) return res.status(404).json({ message: "Not found" });
     res.json({ message: "Deleted" });
+    cleanupImagesLater(imageUrlsOf(item), `testimonial ${item._id} delete`);
   } catch (err) {
     console.error(err);
     res.status(400).json({ message: "Failed to delete testimonial" });
