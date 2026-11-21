@@ -3,6 +3,7 @@ import { Category } from "../models/Category";
 import { authMiddleware } from "../middleware/auth";
 import { singleImage } from "../middleware/imageUpload";
 import { storeImage, InvalidImageError } from "../services/imageStorage";
+import { cleanupImagesLater, imageUrlsOf } from "../services/imageCleanup";
 
 
 const router = Router();
@@ -24,13 +25,16 @@ router.post("/upload", authMiddleware, singleImage(), async (req, res) => {
   try {
     const { key, label, color = "#2d8a4e", icon = "🥦", isCustom = "true", order = "0" } = req.body;
     if (!key || !label) return res.status(400).json({ message: "key and label are required" });
-    const result = await storeImage(req.file.buffer, "qualifresh-categories", `cat-${key}-${Date.now()}`);
+    const result = await storeImage(req.file.buffer, "qualifresh-categories", `cat-${key}`);
+    // This route also saves the category, so it is where the old image is released.
+    const before = await Category.findOne({ key }).lean();
     const cat = await Category.findOneAndUpdate(
       { key },
       { key, label, imageUrl: result.url, color, icon, isCustom: isCustom === "true" || isCustom === true, order: Number(order) },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
     res.status(200).json(cat);
+    cleanupImagesLater(imageUrlsOf(before), `category ${key} image upload`);
   } catch (err) {
     if (err instanceof InvalidImageError) return res.status(400).json({ message: err.message });
     console.error("Category upload error:", err);
@@ -43,12 +47,14 @@ router.post("/", authMiddleware, async (req, res) => {
   try {
     const { key, label, imageUrl = "", color = "#2d8a4e", icon = "🥦", isCustom = true, order = 0 } = req.body;
     if (!key || !label) return res.status(400).json({ message: "key and label are required" });
+    const before = await Category.findOne({ key }).lean();
     const cat = await Category.findOneAndUpdate(
       { key },
       { key, label, imageUrl, color, icon, isCustom, order },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
     res.status(200).json(cat);
+    cleanupImagesLater(imageUrlsOf(before), `category ${key} save`);
   } catch (err) {
     console.error(err);
     res.status(400).json({ message: "Failed to save category" });
@@ -58,8 +64,9 @@ router.post("/", authMiddleware, async (req, res) => {
 // Admin: DELETE /api/categories/key/:key
 router.delete("/key/:key", authMiddleware, async (req, res) => {
   try {
-    await Category.findOneAndDelete({ key: req.params.key });
+    const removed = await Category.findOneAndDelete({ key: req.params.key });
     res.json({ message: "Deleted" });
+    cleanupImagesLater(imageUrlsOf(removed), `category ${req.params.key} delete`);
   } catch (err) {
     console.error(err);
     res.status(400).json({ message: "Failed to delete category" });

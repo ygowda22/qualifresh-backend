@@ -16,6 +16,11 @@
  *
  * The frontend helper cldImg() swaps "-1200.webp" for "-400.webp" when it needs a small image.
  *
+ * Every upload gets a UNIQUE name (<name>-<timestamp>) and nothing is ever
+ * overwritten (Cloudinary overwrite:false, GCS ifGenerationMatch:0), so a
+ * replaced image always has a new URL and no browser/CDN cache shows a stale one.
+ * Old images are removed by services/imageCleanup.ts after the DB save.
+ *
  * GCS env vars (Render → Environment):
  *   STORAGE_PROVIDER=gcs
  *   GCS_BUCKET=qualifresh-images
@@ -27,17 +32,14 @@ import sharp, { type ResizeOptions } from "sharp";
 
 export type StoredImage = { url: string; id: string };
 
-export type StoreOptions = {
-  /**
-   * One image per owner (e.g. per product slug): on Cloudinary the upload
-   * overwrites the same public_id (with CDN invalidation and a 1600px cap)
-   * instead of leaving the previous image behind as an orphan.
-   * On GCS files are cached as immutable, so overwriting a key would keep
-   * showing the old image — a unique timestamped key is used instead and the
-   * caller deletes the old one with deleteImage().
-   */
-  replaceInPlace?: boolean;
-};
+/** The only folders this app ever writes to — and the only ones it may delete from. */
+export const OWN_FOLDERS = new Set([
+  "qualifresh-products",
+  "qualifresh-categories",
+  "qualifresh-farms",
+  "qualifresh-testimonials",
+  "qualifresh-testimonial-photos",
+]);
 
 const AVATAR_FOLDERS = new Set(["qualifresh-testimonials"]);
 export const SMALL_WIDTH = 400;
@@ -98,17 +100,19 @@ function ensureCloudinary() {
   cloudinaryReady = true;
 }
 
-/** Uploads an already-converted WebP buffer. */
-function cloudinaryUpload(webp: Buffer, folder: string, publicId: string, replaceInPlace: boolean): Promise<StoredImage> {
+/** Uploads an already-converted WebP buffer under a new, unique public_id. */
+function cloudinaryUpload(webp: Buffer, folder: string, publicId: string): Promise<StoredImage> {
   ensureCloudinary();
   // The 1600px cap and compression are done by toWebp(); no incoming transformation,
   // so Cloudinary stores exactly the WebP we send and secure_url ends in .webp.
+  // overwrite:false — an existing public_id is never replaced.
   const options: Record<string, unknown> = {
     folder,
-    public_id:     publicId,
-    resource_type: "image",
-    format:        "webp",
-    ...(replaceInPlace ? { overwrite: true, invalidate: true } : {}),
+    public_id:       publicId,
+    resource_type:   "image",
+    format:          "webp",
+    overwrite:       false,
+    unique_filename: false,
   };
   return new Promise((resolve, reject) => {
     cloudinary.uploader
@@ -140,6 +144,7 @@ async function putWebp(buffer: Buffer, key: string, resize: ResizeOptions): Prom
   const out = await sharp(buffer).rotate().resize(resize).webp({ quality: 80 }).toBuffer();
   await bucket().file(key).save(out, {
     resumable: false,
+    preconditionOpts: { ifGenerationMatch: 0 }, // fail instead of overwriting an existing object
     contentType: "image/webp",
     metadata: { cacheControl: "public, max-age=31536000, immutable" },
   });
@@ -167,71 +172,139 @@ export function storeImageInGcs(buffer: Buffer, folder: string, publicId: string
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
-/**
- * Store an uploaded image as WebP and return its public URL.
- * Rejects anything that is not a readable JPEG/PNG/WebP with InvalidImageError
- * (the original bytes are never stored).
- * @param folder   e.g. "qualifresh-products", "qualifresh-categories", "qualifresh-farms"
- * @param publicId file name without extension, e.g. "bok-choy-500gm-1776465534000"
- */
-export async function storeImage(buffer: Buffer, folder: string, publicId: string, opts: StoreOptions = {}): Promise<StoredImage> {
-  await assertSupportedImage(buffer);
-  const safeId = publicId.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || `img-${Date.now()}`;
-  if (storageProvider() === "gcs") {
-    return gcsUpload(buffer, folder, opts.replaceInPlace ? `${safeId}-${Date.now()}` : safeId);
-  }
-  const webp = await toWebp(buffer);
-  console.log(`[image] cloudinary ${folder}/${safeId}: ${kb(buffer.length)} → ${kb(webp.length)} WebP`);
-  return cloudinaryUpload(webp, folder, safeId, !!opts.replaceInPlace);
+/** "Bok Choy 500gm" → "bok-choy-500gm-1776465534000" (always unique per upload). */
+export function uniqueImageName(base: string, now = Date.now()): string {
+  const safe = base.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "img";
+  return `${safe}-${now}`;
 }
 
-// ── Deletion ──────────────────────────────────────────────────────────────────
-const CLD_URL = /^https:\/\/res\.cloudinary\.com\/[^/]+\/image\/upload\/(?:[a-z]{1,3}_[^/]+\/)*(?:v\d+\/)?(.+?)(?:\.[a-zA-Z0-9]+)?(?:\?.*)?$/;
+/**
+ * Store an uploaded image as WebP under a unique name and return its public URL.
+ * Rejects anything that is not a readable JPEG/PNG/WebP with InvalidImageError
+ * (the original bytes are never stored). Never overwrites an existing image.
+ * @param folder one of OWN_FOLDERS, e.g. "qualifresh-products"
+ * @param base   readable base name, e.g. the product slug — a timestamp is appended
+ */
+export async function storeImage(buffer: Buffer, folder: string, base: string): Promise<StoredImage> {
+  if (!OWN_FOLDERS.has(folder)) throw new Error(`storeImage: unknown folder "${folder}"`);
+  await assertSupportedImage(buffer);
+  const name = uniqueImageName(base);
+  if (storageProvider() === "gcs") return gcsUpload(buffer, folder, name);
+  const webp = await toWebp(buffer);
+  console.log(`[image] cloudinary ${folder}/${name}: ${kb(buffer.length)} → ${kb(webp.length)} WebP`);
+  return cloudinaryUpload(webp, folder, name);
+}
+
+// ── URL parsing + deletion ───────────────────────────────────────────────────
+const CLD_URL = /^https:\/\/res\.cloudinary\.com\/([^/]+)\/image\/upload\/(?:[a-z]{1,3}_[^/]+\/)*(?:v\d+\/)?(.+?)(?:\.[a-zA-Z0-9]+)?(?:\?.*)?$/;
 const GCS_URL = /^https:\/\/storage\.googleapis\.com\/([^/]+)\/([^?]+)(?:\?.*)?$/;
+const GCS_SIZE_SUFFIX = new RegExp(`-(${SMALL_WIDTH}|${LARGE_WIDTH}|${AVATAR_SIZE})\\.webp$`);
+
+export type ParsedImageUrl =
+  | { provider: "cloudinary"; cloud: string; publicId: string; folder: string }
+  | {
+      provider: "gcs"; bucket: string; key: string; folder: string;
+      /** every object that belongs to this upload (400 + 1200 pair, or the single 300 avatar) */
+      keys: string[];
+      /** key without the size suffix, e.g. "qualifresh-products/avocado-1776…"; null if it has none */
+      base: string | null;
+    };
+
+/**
+ * Identify a stored image from its public URL. Returns null for anything that is
+ * not a Cloudinary image-upload URL or a GCS URL (e.g. "/products/x.png" in /public,
+ * Unsplash, data: URLs). Handles extensions (.png/.jpg/.webp), version segments,
+ * transformation segments (f_auto,q_auto,w_480/…) and ?query strings.
+ */
+export function parseImageUrl(url: string | undefined | null): ParsedImageUrl | null {
+  if (!url || typeof url !== "string") return null;
+  const u = url.trim();
+  const c = u.match(CLD_URL);
+  if (c) {
+    const publicId = decodeURIComponent(c[2]);
+    return { provider: "cloudinary", cloud: c[1], publicId, folder: publicId.split("/")[0] };
+  }
+  const g = u.match(GCS_URL);
+  if (g) {
+    const key = decodeURIComponent(g[2]);
+    const m = key.match(GCS_SIZE_SUFFIX);
+    if (!m) return { provider: "gcs", bucket: g[1], key, folder: key.split("/")[0], keys: [key], base: null };
+    const base = key.slice(0, -m[0].length);
+    const keys = m[1] === String(AVATAR_SIZE) ? [key] : [`${base}-${SMALL_WIDTH}.webp`, `${base}-${LARGE_WIDTH}.webp`];
+    return { provider: "gcs", bucket: g[1], key, folder: key.split("/")[0], keys, base };
+  }
+  return null;
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Regex (for MongoDB queries) that matches ANY stored URL pointing at the same
+ * image as `parsed` — regardless of version, extension, transformation segment
+ * or ?query (Cloudinary), or which size variant (GCS).
+ */
+export function imageRefPattern(parsed: ParsedImageUrl): RegExp {
+  if (parsed.provider === "cloudinary") {
+    return new RegExp(
+      `^https://res\\.cloudinary\\.com/${escapeRe(parsed.cloud)}/image/upload/(?:[^?]*/)?${escapeRe(parsed.publicId)}(?:\\.[A-Za-z0-9]+)?(?:\\?.*)?$`
+    );
+  }
+  const tail = parsed.base === null
+    ? escapeRe(parsed.key)
+    : `${escapeRe(parsed.base)}-(?:${SMALL_WIDTH}|${LARGE_WIDTH}|${AVATAR_SIZE})\\.webp`;
+  return new RegExp(`^https://storage\\.googleapis\\.com/${escapeRe(parsed.bucket)}/${tail}(?:\\?.*)?$`);
+}
+
+/**
+ * Why this app must NOT delete the image, or null if it may.
+ * Only our own folders, our own Cloudinary cloud and our own GCS bucket.
+ */
+export function deletionBlockedReason(parsed: ParsedImageUrl | null): string | null {
+  if (!parsed) return "not a Cloudinary/GCS URL";
+  if (!OWN_FOLDERS.has(parsed.folder)) return `folder "${parsed.folder}" is not one of ours`;
+  if (parsed.provider === "cloudinary") {
+    if (!process.env.CLOUDINARY_CLOUD_NAME) return "CLOUDINARY_CLOUD_NAME is not set";
+    if (parsed.cloud !== process.env.CLOUDINARY_CLOUD_NAME) return `other Cloudinary cloud "${parsed.cloud}"`;
+  } else if (!process.env.GCS_BUCKET || parsed.bucket !== process.env.GCS_BUCKET) {
+    return `other GCS bucket "${parsed.bucket}"`;
+  }
+  return null;
+}
 
 export function isGcsUrl(url: string | undefined | null): boolean {
-  return !!url && GCS_URL.test(url);
+  return parseImageUrl(url)?.provider === "gcs";
 }
 
 /** Cloudinary public_id ("folder/name", no extension) for a delivery URL, or null. */
 export function cloudinaryPublicId(url: string): string | null {
-  const m = url.match(CLD_URL);
-  return m ? m[1] : null;
+  const p = parseImageUrl(url);
+  return p?.provider === "cloudinary" ? p.publicId : null;
 }
 
 /**
- * Delete a stored image by its public URL.
- * Cloudinary public_ids carry no extension, so old .png/.jpg URLs and new .webp
- * URLs resolve to the same kind of id ("folder/name") and are destroyed alike. Handles both providers regardless of
+ * Delete a stored image by its public URL. Handles both providers regardless of
  * STORAGE_PROVIDER, so images uploaded before a switch can still be cleaned up:
- *   Cloudinary → destroy(public_id) with CDN invalidation
+ *   Cloudinary → destroy(public_id) with CDN invalidation. public_ids carry no
+ *                extension, so old .png/.jpg and new .webp URLs are handled alike.
  *   GCS        → deletes the <name>-400.webp and <name>-1200.webp pair
  *                (or the single <name>-300.webp avatar)
- * Unknown URLs (local /public files, other hosts) are ignored. Missing files
- * are not an error. Returns true if something was deleted.
+ * Refuses (returns false) for anything outside OWN_FOLDERS / our cloud / our bucket
+ * and for non-Cloudinary/GCS URLs (local /public files, other hosts).
+ * Missing files are not an error. Throws only on provider/network errors —
+ * request handlers should use services/imageCleanup.ts, which never throws.
  */
 export async function deleteImage(url: string | undefined | null): Promise<boolean> {
-  if (!url) return false;
-
-  const g = url.match(GCS_URL);
-  if (g) {
-    const [, bucketName, key] = g;
-    if (bucketName !== process.env.GCS_BUCKET) {
-      console.warn(`deleteImage: skipping GCS URL outside bucket ${process.env.GCS_BUCKET}: ${url}`);
-      return false;
-    }
-    const keys = /-(400|1200)\.webp$/.test(key)
-      ? [key.replace(/-(400|1200)\.webp$/, `-${SMALL_WIDTH}.webp`), key.replace(/-(400|1200)\.webp$/, `-${LARGE_WIDTH}.webp`)]
-      : [key];
-    await Promise.all(keys.map(k => bucket().file(k).delete({ ignoreNotFound: true })));
+  const parsed = parseImageUrl(url);
+  const blocked = deletionBlockedReason(parsed);
+  if (blocked || !parsed) {
+    if (parsed) console.warn(`[image] not deleting ${url}: ${blocked}`);
+    return false;
+  }
+  if (parsed.provider === "gcs") {
+    await Promise.all(parsed.keys.map(k => bucket().file(k).delete({ ignoreNotFound: true })));
     return true;
   }
-
-  const publicId = cloudinaryPublicId(url);
-  if (publicId) {
-    ensureCloudinary();
-    const res = await cloudinary.uploader.destroy(publicId, { invalidate: true, resource_type: "image" });
-    return res?.result === "ok";
-  }
-  return false;
+  ensureCloudinary();
+  const res = await cloudinary.uploader.destroy(parsed.publicId, { invalidate: true, resource_type: "image" });
+  return res?.result === "ok";
 }

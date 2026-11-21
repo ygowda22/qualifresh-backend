@@ -2,7 +2,7 @@ import { Router, Request, Response } from "express";
 import path from "path";
 import { authMiddleware } from "../middleware/auth";
 import { singleImage } from "../middleware/imageUpload";
-import { storeImage, InvalidImageError } from "../services/imageStorage";
+import { storeImage, InvalidImageError, OWN_FOLDERS } from "../services/imageStorage";
 
 
 const router = Router();
@@ -18,16 +18,12 @@ router.post("/", authMiddleware, singleImage(), async (req: Request, res: Respon
       ? slug.replace(/[^a-z0-9-]/gi, "-").toLowerCase()
       : path.basename(req.file.originalname, ext).replace(/\s+/g, "-").toLowerCase();
     const folder   = (req.body.folder as string) || "qualifresh-products";
+    if (!OWN_FOLDERS.has(folder)) return res.status(400).json({ message: `Unknown upload folder "${folder}"` });
 
-    // Product images get a deterministic id keyed by slug so re-uploading
-    // (edit) replaces the product's image instead of orphaning the old one
-    // (see StoreOptions.replaceInPlace for how each provider does this).
-    // Requires an actual slug (not the filename fallback) — two products could
-    // otherwise share a filename like "photo.jpg" and overwrite each other's image.
-    const isProductUpload = folder === "qualifresh-products" && !!slug;
-    const result = isProductUpload
-      ? await storeImage(req.file.buffer, folder, baseName, { replaceInPlace: true })
-      : await storeImage(req.file.buffer, folder, `${baseName}-${Date.now()}`);
+    // Always a NEW unique name (<slug or filename>-<timestamp>); nothing is overwritten.
+    // The previous image is NOT deleted here — the upload may still be cancelled.
+    // It is removed by the product/category/farm/testimonial save route after the DB update.
+    const result = await storeImage(req.file.buffer, folder, baseName);
 
     return res.json({ url: result.url, filename: result.id });
   } catch (err) {
