@@ -1,26 +1,14 @@
 import { Router, Request, Response } from "express";
-import multer from "multer";
 import path from "path";
 import { authMiddleware } from "../middleware/auth";
-import { storeImage } from "../services/imageStorage";
-
-const ALLOWED_EXT = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    if (ALLOWED_EXT.includes(ext)) cb(null, true);
-    else cb(new Error("Only image files are allowed"));
-  },
-});
+import { singleImage } from "../middleware/imageUpload";
+import { storeImage, InvalidImageError } from "../services/imageStorage";
 
 
 const router = Router();
 
 // POST /api/upload — admin only
-router.post("/", authMiddleware, upload.single("image"), async (req: Request, res: Response) => {
+router.post("/", authMiddleware, singleImage(), async (req: Request, res: Response) => {
   if (!req.file) return res.status(400).json({ message: "No file uploaded" });
 
   try {
@@ -43,6 +31,7 @@ router.post("/", authMiddleware, upload.single("image"), async (req: Request, re
 
     return res.json({ url: result.url, filename: result.id });
   } catch (err) {
+    if (err instanceof InvalidImageError) return res.status(400).json({ message: err.message });
     console.error("Image upload error:", err);
     return res.status(500).json({ message: "Upload failed" });
   }

@@ -1,7 +1,11 @@
 /**
  * Single place where uploaded images are stored.
  *
- * STORAGE_PROVIDER=cloudinary (default) → same behaviour as before: original file to Cloudinary.
+ * Every upload is checked with sharp first: only JPEG, PNG and WebP are accepted
+ * (HEIC, PDF, GIF, corrupt files → InvalidImageError → HTTP 400). Nothing is ever
+ * stored in its original format.
+ *
+ * STORAGE_PROVIDER=cloudinary (default) → converted to WebP (max 1600px wide) with sharp, then uploaded to Cloudinary.
  * STORAGE_PROVIDER=gcs                  → converted to WebP with sharp and stored in Google Cloud Storage.
  *
  * GCS layout (one upload → two files, the returned URL is the large one):
@@ -40,6 +44,44 @@ export const SMALL_WIDTH = 400;
 export const LARGE_WIDTH = 1200;
 export const AVATAR_SIZE = 300;
 
+// ── Validation + WebP conversion ─────────────────────────────────────────────
+export const UNSUPPORTED_IMAGE_MESSAGE = "Please upload a JPG, PNG or WebP image";
+const ACCEPTED_FORMATS = new Set(["jpeg", "png", "webp"]);
+
+/** Thrown when an upload is not a readable JPEG/PNG/WebP. Routes map it to HTTP 400. */
+export class InvalidImageError extends Error {
+  constructor(message = UNSUPPORTED_IMAGE_MESSAGE) {
+    super(message);
+    this.name = "InvalidImageError";
+  }
+}
+
+/** Throws InvalidImageError unless sharp can read the buffer as JPEG, PNG or WebP. */
+export async function assertSupportedImage(buffer: Buffer): Promise<void> {
+  let format: string | undefined;
+  try {
+    format = (await sharp(buffer).metadata()).format;
+  } catch {
+    throw new InvalidImageError();
+  }
+  if (!format || !ACCEPTED_FORMATS.has(format)) throw new InvalidImageError();
+}
+
+/** Auto-rotate (EXIF), cap the width, encode as WebP. Keeps transparency. */
+export async function toWebp(buffer: Buffer, maxWidth = 1600): Promise<Buffer> {
+  try {
+    return await sharp(buffer)
+      .rotate()
+      .resize({ width: maxWidth, withoutEnlargement: true })
+      .webp({ quality: 82 })
+      .toBuffer();
+  } catch {
+    throw new InvalidImageError();
+  }
+}
+
+const kb = (bytes: number) => `${(bytes / 1024).toFixed(1)} KB`;
+
 export function storageProvider(): "gcs" | "cloudinary" {
   return (process.env.STORAGE_PROVIDER || "cloudinary").toLowerCase() === "gcs" ? "gcs" : "cloudinary";
 }
@@ -56,25 +98,25 @@ function ensureCloudinary() {
   cloudinaryReady = true;
 }
 
-function cloudinaryUpload(buffer: Buffer, folder: string, publicId: string, replaceInPlace: boolean): Promise<StoredImage> {
+/** Uploads an already-converted WebP buffer. */
+function cloudinaryUpload(webp: Buffer, folder: string, publicId: string, replaceInPlace: boolean): Promise<StoredImage> {
   ensureCloudinary();
-  const options: Record<string, unknown> = replaceInPlace
-    ? {
-        folder,
-        public_id:     publicId,
-        overwrite:     true,
-        invalidate:    true,
-        resource_type: "image",
-        transformation: [{ width: 1600, crop: "limit", quality: "auto", fetch_format: "auto" }],
-      }
-    : { folder, public_id: publicId, resource_type: "image" };
+  // The 1600px cap and compression are done by toWebp(); no incoming transformation,
+  // so Cloudinary stores exactly the WebP we send and secure_url ends in .webp.
+  const options: Record<string, unknown> = {
+    folder,
+    public_id:     publicId,
+    resource_type: "image",
+    format:        "webp",
+    ...(replaceInPlace ? { overwrite: true, invalidate: true } : {}),
+  };
   return new Promise((resolve, reject) => {
     cloudinary.uploader
       .upload_stream(options, (error, result) => {
         if (error || !result) reject(error ?? new Error("No result from Cloudinary"));
         else resolve({ url: result.secure_url, id: result.public_id });
       })
-      .end(buffer);
+      .end(webp);
   });
 }
 
@@ -94,26 +136,28 @@ export function gcsPublicUrl(key: string): string {
   return `https://storage.googleapis.com/${process.env.GCS_BUCKET}/${key}`;
 }
 
-async function putWebp(buffer: Buffer, key: string, resize: ResizeOptions): Promise<string> {
+async function putWebp(buffer: Buffer, key: string, resize: ResizeOptions): Promise<{ url: string; bytes: number }> {
   const out = await sharp(buffer).rotate().resize(resize).webp({ quality: 80 }).toBuffer();
   await bucket().file(key).save(out, {
     resumable: false,
     contentType: "image/webp",
     metadata: { cacheControl: "public, max-age=31536000, immutable" },
   });
-  return gcsPublicUrl(key);
+  return { url: gcsPublicUrl(key), bytes: out.length };
 }
 
 async function gcsUpload(buffer: Buffer, folder: string, publicId: string): Promise<StoredImage> {
   const base = `${folder}/${publicId}`;
   if (AVATAR_FOLDERS.has(folder)) {
-    const url = await putWebp(buffer, `${base}-${AVATAR_SIZE}.webp`, {
+    const { url, bytes } = await putWebp(buffer, `${base}-${AVATAR_SIZE}.webp`, {
       width: AVATAR_SIZE, height: AVATAR_SIZE, fit: "cover", position: sharp.strategy.attention,
     });
+    console.log(`[image] gcs ${base}: ${kb(buffer.length)} → ${kb(bytes)} WebP`);
     return { url, id: `${base}-${AVATAR_SIZE}.webp` };
   }
   await putWebp(buffer, `${base}-${SMALL_WIDTH}.webp`, { width: SMALL_WIDTH, withoutEnlargement: true });
-  const url = await putWebp(buffer, `${base}-${LARGE_WIDTH}.webp`, { width: LARGE_WIDTH, withoutEnlargement: true });
+  const { url, bytes } = await putWebp(buffer, `${base}-${LARGE_WIDTH}.webp`, { width: LARGE_WIDTH, withoutEnlargement: true });
+  console.log(`[image] gcs ${base}: ${kb(buffer.length)} → ${kb(bytes)} WebP (${LARGE_WIDTH}px)`);
   return { url, id: `${base}-${LARGE_WIDTH}.webp` };
 }
 
@@ -124,16 +168,21 @@ export function storeImageInGcs(buffer: Buffer, folder: string, publicId: string
 
 // ── Public API ────────────────────────────────────────────────────────────────
 /**
- * Store an uploaded image and return its public URL.
+ * Store an uploaded image as WebP and return its public URL.
+ * Rejects anything that is not a readable JPEG/PNG/WebP with InvalidImageError
+ * (the original bytes are never stored).
  * @param folder   e.g. "qualifresh-products", "qualifresh-categories", "qualifresh-farms"
  * @param publicId file name without extension, e.g. "bok-choy-500gm-1776465534000"
  */
-export function storeImage(buffer: Buffer, folder: string, publicId: string, opts: StoreOptions = {}): Promise<StoredImage> {
+export async function storeImage(buffer: Buffer, folder: string, publicId: string, opts: StoreOptions = {}): Promise<StoredImage> {
+  await assertSupportedImage(buffer);
   const safeId = publicId.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || `img-${Date.now()}`;
   if (storageProvider() === "gcs") {
     return gcsUpload(buffer, folder, opts.replaceInPlace ? `${safeId}-${Date.now()}` : safeId);
   }
-  return cloudinaryUpload(buffer, folder, safeId, !!opts.replaceInPlace);
+  const webp = await toWebp(buffer);
+  console.log(`[image] cloudinary ${folder}/${safeId}: ${kb(buffer.length)} → ${kb(webp.length)} WebP`);
+  return cloudinaryUpload(webp, folder, safeId, !!opts.replaceInPlace);
 }
 
 // ── Deletion ──────────────────────────────────────────────────────────────────
@@ -151,7 +200,9 @@ export function cloudinaryPublicId(url: string): string | null {
 }
 
 /**
- * Delete a stored image by its public URL. Handles both providers regardless of
+ * Delete a stored image by its public URL.
+ * Cloudinary public_ids carry no extension, so old .png/.jpg URLs and new .webp
+ * URLs resolve to the same kind of id ("folder/name") and are destroyed alike. Handles both providers regardless of
  * STORAGE_PROVIDER, so images uploaded before a switch can still be cleaned up:
  *   Cloudinary → destroy(public_id) with CDN invalidation
  *   GCS        → deletes the <name>-400.webp and <name>-1200.webp pair

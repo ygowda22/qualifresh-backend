@@ -1,10 +1,8 @@
 import { Router } from "express";
-import multer from "multer";
 import { FarmPhoto } from "../models/FarmPhoto";
 import { authMiddleware } from "../middleware/auth";
-import { storeImage } from "../services/imageStorage";
-
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+import { singleImage } from "../middleware/imageUpload";
+import { storeImage, InvalidImageError } from "../services/imageStorage";
 
 
 const router = Router();
@@ -21,7 +19,7 @@ router.get("/", async (_req, res) => {
 });
 
 // Admin: POST /api/farms/upload — image upload + MongoDB save in one step
-router.post("/upload", authMiddleware, upload.single("image"), async (req, res) => {
+router.post("/upload", authMiddleware, singleImage(), async (req, res) => {
   if (!req.file) return res.status(400).json({ message: "No image file provided" });
   try {
     const { title = "", description = "", id } = req.body;
@@ -40,6 +38,7 @@ router.post("/upload", authMiddleware, upload.single("image"), async (req, res) 
     }
     res.status(201).json(photo);
   } catch (err) {
+    if (err instanceof InvalidImageError) return res.status(400).json({ message: err.message });
     console.error("Farm upload error:", err);
     res.status(500).json({ message: "Upload failed" });
   }
