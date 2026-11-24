@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 import { Order } from "../models/Order";
 import { Product } from "../models/Product";
 import { User } from "../models/User";
-import { authMiddleware, AuthRequest } from "../middleware/auth";
+import { authMiddleware, adminOnly, AuthRequest } from "../middleware/auth";
 import { sendOrderConfirmation, sendAdminOrderNotification, sendOrderStatusUpdate } from "../services/email";
 
 const router = Router();
@@ -75,7 +75,7 @@ router.post("/", async (req, res) => {
 });
 
 // GET /api/orders — admin: all orders
-router.get("/", authMiddleware, async (req: AuthRequest, res) => {
+router.get("/", adminOnly, async (req: AuthRequest, res) => {
   try {
     const orders = await Order.find()
       .populate("user", "name email phone")
@@ -103,7 +103,7 @@ router.get("/my", authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // PUT /api/orders/:id/status — admin: update status
-router.put("/:id/status", authMiddleware, async (req, res) => {
+router.put("/:id/status", adminOnly, async (req, res) => {
   try {
     const { status } = req.body;
     const order = await Order.findByIdAndUpdate(req.params.id, { status }, { new: true }).populate("user", "name email");
@@ -128,7 +128,7 @@ router.put("/:id/status", authMiddleware, async (req, res) => {
 });
 
 // DELETE /api/orders/:id — admin: delete order
-router.delete("/:id", authMiddleware, async (req, res) => {
+router.delete("/:id", adminOnly, async (req, res) => {
   try {
     const order = await Order.findByIdAndDelete(req.params.id);
     if (!order) return res.status(404).json({ message: "Order not found" });
@@ -160,7 +160,7 @@ router.delete("/:id", authMiddleware, async (req, res) => {
 });
 
 // GET /api/orders/analytics — admin: dashboard stats
-router.get("/analytics", authMiddleware, async (req: AuthRequest, res) => {
+router.get("/analytics", adminOnly, async (req: AuthRequest, res) => {
   try {
     const [totalOrders, totalRevenue, statusBreakdown, recentOrders, dailyOrders] = await Promise.all([
       Order.countDocuments(),

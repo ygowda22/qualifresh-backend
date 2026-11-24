@@ -1,12 +1,12 @@
 import { Router } from "express";
 import { User } from "../models/User";
-import { authMiddleware } from "../middleware/auth";
+import { adminOnly } from "../middleware/auth";
 import bcrypt from "bcryptjs";
 
 const router = Router();
 
 // POST /api/admin/users — Create a new user
-router.post("/", authMiddleware, async (req, res) => {
+router.post("/", adminOnly, async (req, res) => {
   try {
     const { name, email, phone, password, isActive } = req.body;
     if (!name || !email || !phone || !password) {
@@ -24,7 +24,7 @@ router.post("/", authMiddleware, async (req, res) => {
 });
 
 // PUT /api/admin/users/:id — Update a user
-router.put("/:id", authMiddleware, async (req, res) => {
+router.put("/:id", adminOnly, async (req, res) => {
   try {
     const { name, email, phone, password, isActive } = req.body;
     const updates: any = { isActive: isActive !== false };
@@ -44,7 +44,7 @@ router.put("/:id", authMiddleware, async (req, res) => {
 });
 
 // GET /api/admin/users
-router.get("/", authMiddleware, async (req, res) => {
+router.get("/", adminOnly, async (req, res) => {
   try {
     const users = await User.find({ role: "user" }).select("-password").sort({ createdAt: -1 });
     res.json(users);
@@ -54,7 +54,7 @@ router.get("/", authMiddleware, async (req, res) => {
 });
 
 // DELETE /api/admin/users/:id
-router.delete("/:id", authMiddleware, async (req, res) => {
+router.delete("/:id", adminOnly, async (req, res) => {
   try {
     await User.findByIdAndDelete(req.params.id);
     res.json({ success: true });
@@ -64,7 +64,7 @@ router.delete("/:id", authMiddleware, async (req, res) => {
 });
 
 // GET /api/admin/stats
-router.get("/stats", authMiddleware, async (req, res) => {
+router.get("/stats", adminOnly, async (req, res) => {
   try {
     const { Order } = await import("../models/Order");
     const [totalUsers, newUsersThisMonth, totalOrders, totalRevenue, topProducts] = await Promise.all([

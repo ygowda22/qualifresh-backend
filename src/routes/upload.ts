@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import path from "path";
-import { authMiddleware } from "../middleware/auth";
+import { adminOnly } from "../middleware/auth";
 import { singleImage } from "../middleware/imageUpload";
 import { storeImage, InvalidImageError, OWN_FOLDERS } from "../services/imageStorage";
 
@@ -8,7 +8,7 @@ import { storeImage, InvalidImageError, OWN_FOLDERS } from "../services/imageSto
 const router = Router();
 
 // POST /api/upload — admin only
-router.post("/", authMiddleware, singleImage(), async (req: Request, res: Response) => {
+router.post("/", adminOnly, singleImage(), async (req: Request, res: Response) => {
   if (!req.file) return res.status(400).json({ message: "No file uploaded" });
 
   try {
