@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { Testimonial } from "../models/Testimonial";
-import { authMiddleware } from "../middleware/auth";
+import { adminOnly } from "../middleware/auth";
 import { sanitizeText } from "../utils/sanitize";
 import { cleanupImagesLater, imageUrlsOf } from "../services/imageCleanup";
 
@@ -43,7 +43,7 @@ router.get("/", async (_req, res) => {
 });
 
 // Admin: GET /api/testimonials/all — everything including inactive
-router.get("/all", authMiddleware, async (_req, res) => {
+router.get("/all", adminOnly, async (_req, res) => {
   try {
     const items = await Testimonial.find({}).sort({ sortOrder: 1, createdAt: -1 });
     res.json(items);
@@ -54,7 +54,7 @@ router.get("/all", authMiddleware, async (_req, res) => {
 });
 
 // Admin: POST /api/testimonials
-router.post("/", authMiddleware, async (req, res) => {
+router.post("/", adminOnly, async (req, res) => {
   try {
     const body = buildBody(req);
     if (!body.name || !body.message) {
@@ -69,7 +69,7 @@ router.post("/", authMiddleware, async (req, res) => {
 });
 
 // Admin: PUT /api/testimonials/:id
-router.put("/:id", authMiddleware, async (req, res) => {
+router.put("/:id", adminOnly, async (req, res) => {
   try {
     const body = buildBody(req);
     if (!body.name || !body.message) {
@@ -87,7 +87,7 @@ router.put("/:id", authMiddleware, async (req, res) => {
 });
 
 // Admin: DELETE /api/testimonials/:id
-router.delete("/:id", authMiddleware, async (req, res) => {
+router.delete("/:id", adminOnly, async (req, res) => {
   try {
     const item = await Testimonial.findByIdAndDelete(req.params.id);
     if (!item) return res.status(404).json({ message: "Not found" });

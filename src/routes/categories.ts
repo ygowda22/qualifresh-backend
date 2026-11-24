@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { Category } from "../models/Category";
-import { authMiddleware } from "../middleware/auth";
+import { adminOnly } from "../middleware/auth";
 import { singleImage } from "../middleware/imageUpload";
 import { storeImage, InvalidImageError } from "../services/imageStorage";
 import { cleanupImagesLater, imageUrlsOf } from "../services/imageCleanup";
@@ -20,7 +20,7 @@ router.get("/", async (_req, res) => {
 });
 
 // Admin: POST /api/categories/upload — image upload + MongoDB upsert in one step
-router.post("/upload", authMiddleware, singleImage(), async (req, res) => {
+router.post("/upload", adminOnly, singleImage(), async (req, res) => {
   if (!req.file) return res.status(400).json({ message: "No image file provided" });
   try {
     const { key, label, color = "#2d8a4e", icon = "🥦", isCustom = "true", order = "0" } = req.body;
@@ -43,7 +43,7 @@ router.post("/upload", authMiddleware, singleImage(), async (req, res) => {
 });
 
 // Admin: POST /api/categories — upsert by key (handles create + update)
-router.post("/", authMiddleware, async (req, res) => {
+router.post("/", adminOnly, async (req, res) => {
   try {
     const { key, label, imageUrl = "", color = "#2d8a4e", icon = "🥦", isCustom = true, order = 0 } = req.body;
     if (!key || !label) return res.status(400).json({ message: "key and label are required" });
@@ -62,7 +62,7 @@ router.post("/", authMiddleware, async (req, res) => {
 });
 
 // Admin: DELETE /api/categories/key/:key
-router.delete("/key/:key", authMiddleware, async (req, res) => {
+router.delete("/key/:key", adminOnly, async (req, res) => {
   try {
     const removed = await Category.findOneAndDelete({ key: req.params.key });
     res.json({ message: "Deleted" });

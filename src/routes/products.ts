@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { Product } from "../models/Product";
-import { authMiddleware } from "../middleware/auth";
+import { adminOnly } from "../middleware/auth";
 import { cleanupImagesLater, imageUrlsOf } from "../services/imageCleanup";
 
 const router = Router();
@@ -17,7 +17,7 @@ router.get("/", async (req, res) => {
 });
 
 // Admin: GET /api/products/admin/all  (ALL products including inactive — for admin panel)
-router.get("/admin/all", authMiddleware, async (req, res) => {
+router.get("/admin/all", adminOnly, async (req, res) => {
   try {
     const products = await Product.find({}).sort({ name: 1 });
     res.json(products);
@@ -43,7 +43,7 @@ router.get("/:slug", async (req, res) => {
 });
 
 // Admin: POST /api/products
-router.post("/", authMiddleware, async (req, res) => {
+router.post("/", adminOnly, async (req, res) => {
   try {
     if (!req.body.quantityLabel || req.body.quantityLabel.trim() === "") {
       return res.status(400).json({ error: "quantityLabel is required" });
@@ -57,7 +57,7 @@ router.post("/", authMiddleware, async (req, res) => {
 });
 
 // Admin: PUT /api/products/:id
-router.put("/:id", authMiddleware, async (req, res) => {
+router.put("/:id", adminOnly, async (req, res) => {
   try {
     const before = await Product.findById(req.params.id).lean();
     if (!before) return res.status(404).json({ message: "Not found" });
@@ -73,7 +73,7 @@ router.put("/:id", authMiddleware, async (req, res) => {
 });
 
 // Admin: DELETE /api/products/:id
-router.delete("/:id", authMiddleware, async (req, res) => {
+router.delete("/:id", adminOnly, async (req, res) => {
   try {
     const product = await Product.findByIdAndDelete(req.params.id);
     if (!product) return res.status(404).json({ message: "Not found" });

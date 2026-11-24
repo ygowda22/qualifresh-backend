@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { FarmPhoto } from "../models/FarmPhoto";
-import { authMiddleware } from "../middleware/auth";
+import { adminOnly } from "../middleware/auth";
 import { singleImage } from "../middleware/imageUpload";
 import { storeImage, InvalidImageError } from "../services/imageStorage";
 import { cleanupImagesLater, imageUrlsOf } from "../services/imageCleanup";
@@ -20,7 +20,7 @@ router.get("/", async (_req, res) => {
 });
 
 // Admin: POST /api/farms/upload — image upload + MongoDB save in one step
-router.post("/upload", authMiddleware, singleImage(), async (req, res) => {
+router.post("/upload", adminOnly, singleImage(), async (req, res) => {
   if (!req.file) return res.status(400).json({ message: "No image file provided" });
   try {
     const { title = "", description = "", id } = req.body;
@@ -50,7 +50,7 @@ router.post("/upload", authMiddleware, singleImage(), async (req, res) => {
 });
 
 // Admin: POST /api/farms
-router.post("/", authMiddleware, async (req, res) => {
+router.post("/", adminOnly, async (req, res) => {
   try {
     const { title = "", description = "", imageUrl, order = 0 } = req.body;
     if (!imageUrl) return res.status(400).json({ message: "imageUrl is required" });
@@ -63,7 +63,7 @@ router.post("/", authMiddleware, async (req, res) => {
 });
 
 // Admin: PUT /api/farms/:id
-router.put("/:id", authMiddleware, async (req, res) => {
+router.put("/:id", adminOnly, async (req, res) => {
   try {
     const { title, description, imageUrl, order } = req.body;
     const before = await FarmPhoto.findById(req.params.id).lean();
@@ -82,7 +82,7 @@ router.put("/:id", authMiddleware, async (req, res) => {
 });
 
 // Admin: DELETE /api/farms/:id
-router.delete("/:id", authMiddleware, async (req, res) => {
+router.delete("/:id", adminOnly, async (req, res) => {
   try {
     const photo = await FarmPhoto.findByIdAndDelete(req.params.id);
     if (!photo) return res.status(404).json({ message: "Not found" });
