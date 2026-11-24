@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { Order } from "../models/Order";
-import { Product } from "../models/Product";
+import { customerIdFromToken } from "../middleware/auth";
+import { priceOrderItems } from "../config/pricing";
 
 const router = Router();
 
@@ -13,26 +14,24 @@ router.post("/", async (req, res) => {
     const {
       items, subtotal, deliveryCharge, total,
       address, city, deliverySlot, notes,
-      name, phone, email, userId,
-    } = req.body;
+      name, phone, email,
+    } = req.body; // any userId in the body is ignored — the account comes only from the login token
 
     if (!items?.length || !deliverySlot || !name || !phone || !city)
       return res.status(400).json({ message: "Missing required fields" });
 
-    const productIds = items.map((i: { productId: string }) => i.productId).filter(Boolean);
-    const outOfStock = await Product.find({ _id: { $in: productIds }, stock: 0 }).select("name");
-    if (outOfStock.length) {
-      return res.status(400).json({
-        message: `Out of stock: ${outOfStock.map(p => p.name).join(", ")}. Remove to proceed.`,
-      });
-    }
+    // Items, prices and totals come from the database; a stale cart gets 409 PRICES_CHANGED.
+    const priced = await priceOrderItems(items, { subtotal, total });
+    if (!priced.ok) return res.status(priced.status).json(priced.body);
+    const { subtotal: srvSubtotal, deliveryCharge: srvDelivery, total: srvTotal } = priced.totals;
+    const userId = await customerIdFromToken(req);
 
     const order = await Order.create({
       user:        userId || undefined,
       guestName:   userId ? undefined : name,
       guestEmail:  userId ? undefined : email,
       guestPhone:  userId ? undefined : phone,
-      items, subtotal, deliveryCharge, total,
+      items: priced.items, subtotal: srvSubtotal, deliveryCharge: srvDelivery, total: srvTotal,
       // deliveryAddress is required at the schema level (shared with email orders) —
       // WhatsApp orders may omit it, so fall back to a placeholder rather than failing.
       deliveryAddress: address && String(address).trim() ? address : "Not provided",
@@ -41,8 +40,8 @@ router.post("/", async (req, res) => {
     });
 
     const waMessage = "Hi QualiFresh! I'd like to order:\n" +
-      items.map((i: { name: string; quantity: number; price: number }) => `• ${i.name} ×${i.quantity} — ₹${i.price * i.quantity}`).join("\n") +
-      `\n\nTotal: ₹${total}` +
+      priced.items.map(i => `• ${i.name} ×${i.quantity} — ₹${i.price * i.quantity}`).join("\n") +
+      `\n\nTotal: ₹${srvTotal}` +
       `\n\nOrder: ${order.orderNumber}\nName: ${name}\nPhone: ${phone}` +
       (address && String(address).trim() ? `\nAddress: ${address}, ${city}` : `\nCity: ${city}`) +
       `\nDelivery Slot: ${deliverySlot}`;

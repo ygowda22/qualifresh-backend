@@ -12,7 +12,8 @@ const AdminUserSchema = new Schema<IAdminUser>(
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true }
   },
-  { timestamps: true }
+  // Never send the password hash in any API response (login still reads it on the server).
+  { timestamps: true, toJSON: { transform: (_doc, ret: any) => { delete ret.password; return ret; } } }
 );
 
 AdminUserSchema.pre("save", async function (next) {
