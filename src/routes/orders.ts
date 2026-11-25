@@ -1,9 +1,9 @@
 import { Router } from "express";
 import mongoose from "mongoose";
 import { Order } from "../models/Order";
-import { Product } from "../models/Product";
 import { User } from "../models/User";
-import { authMiddleware, adminOnly, AuthRequest } from "../middleware/auth";
+import { authMiddleware, adminOnly, AuthRequest, customerIdFromToken } from "../middleware/auth";
+import { priceOrderItems } from "../config/pricing";
 import { sendOrderConfirmation, sendAdminOrderNotification, sendOrderStatusUpdate } from "../services/email";
 
 const router = Router();
@@ -14,26 +14,24 @@ router.post("/", async (req, res) => {
     const {
       items, subtotal, deliveryCharge, total,
       deliveryAddress, city, deliverySlot, notes,
-      guestName, guestEmail, guestPhone, userId, source,
-    } = req.body;
+      guestName, guestEmail, guestPhone, source,
+    } = req.body; // any userId in the body is ignored — the account comes only from the login token
 
     if (!items?.length || !deliveryAddress || !deliverySlot)
       return res.status(400).json({ message: "Missing required fields" });
 
-    const productIds = items.map((i: { productId: string }) => i.productId).filter(Boolean);
-    const outOfStock = await Product.find({ _id: { $in: productIds }, stock: 0 }).select("name");
-    if (outOfStock.length) {
-      return res.status(400).json({
-        message: `Out of stock: ${outOfStock.map(p => p.name).join(", ")}. Remove to proceed.`,
-      });
-    }
+    // Items, prices and totals come from the database; a stale cart gets 409 PRICES_CHANGED.
+    const priced = await priceOrderItems(items, { subtotal, total });
+    if (!priced.ok) return res.status(priced.status).json(priced.body);
+    const { subtotal: srvSubtotal, deliveryCharge: srvDelivery, total: srvTotal } = priced.totals;
+    const userId = await customerIdFromToken(req);
 
     const order = await Order.create({
       user:           userId || undefined,
       guestName:      userId ? undefined : guestName,
       guestEmail:     userId ? undefined : guestEmail,
       guestPhone:     userId ? undefined : guestPhone,
-      items, subtotal, deliveryCharge, total,
+      items: priced.items, subtotal: srvSubtotal, deliveryCharge: srvDelivery, total: srvTotal,
       deliveryAddress, city: city || "Pune", deliverySlot, notes,
       source: source === "whatsapp" ? "whatsapp" : "website",
     });
@@ -57,14 +55,14 @@ router.post("/", async (req, res) => {
     if (customerEmail) {
       sendOrderConfirmation(customerEmail, customerName, {
         orderNumber: order.orderNumber,
-        items, subtotal, deliveryCharge, total, deliverySlot, deliveryAddress,
+        items: priced.items, subtotal: srvSubtotal, deliveryCharge: srvDelivery, total: srvTotal, deliverySlot, deliveryAddress,
       }).catch(console.error);
     }
 
     sendAdminOrderNotification({
       orderNumber: order.orderNumber,
       customerName, customerEmail, customerPhone,
-      items, total, deliveryAddress, deliverySlot, notes,
+      items: priced.items, total: srvTotal, deliveryAddress, deliverySlot, notes,
     }).catch(console.error);
 
     res.status(201).json({ success: true, orderNumber: order.orderNumber, orderId: order._id });
@@ -87,15 +85,12 @@ router.get("/", adminOnly, async (req: AuthRequest, res) => {
   }
 });
 
-// GET /api/orders/my — get logged-in user orders (by userId ref OR by email for legacy orders)
+// GET /api/orders/my — the logged-in customer's own orders: ONLY orders linked to the account.
+// (No email matching: sign-up doesn't verify email, so matching guest orders by email could show
+// someone else's orders.)
 router.get("/my", authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const orders = await Order.find({
-      $or: [
-        { user: req.user!.id },
-        { guestEmail: req.user!.email },
-      ],
-    }).sort({ createdAt: -1 });
+    const orders = await Order.find({ user: req.user!.id }).sort({ createdAt: -1 });
     res.json(orders);
   } catch (err) {
     res.status(500).json({ message: "Failed to fetch orders" });

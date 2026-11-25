@@ -78,7 +78,7 @@ async function seed(mongoUrl, dbName) {
   return conn;
 }
 
-async function startApi({ distDir, mongoUrl, dbName, port }) {
+async function startApi({ distDir, mongoUrl, dbName, port, allowedOrigins = "" }) {
   assertLocal(mongoUrl);
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "qf-api-")); // no .env here → dotenv loads nothing
   const env = {
@@ -86,7 +86,7 @@ async function startApi({ distDir, mongoUrl, dbName, port }) {
     PORT: String(port), MONGO_URI: `${mongoUrl}/${dbName}`, JWT_SECRET: SECRET,
     BREVO_API_KEY: "", EMAIL_HOST: "", EMAIL_PORT: "", EMAIL_USER: "", EMAIL_PASS: "",
     CLOUDINARY_CLOUD_NAME: "invalid-test-cloud", CLOUDINARY_API_KEY: "invalid", CLOUDINARY_API_SECRET: "invalid",
-    STORAGE_PROVIDER: "cloudinary", ALLOWED_ORIGINS: "",
+    STORAGE_PROVIDER: "cloudinary", ALLOWED_ORIGINS: allowedOrigins, // e.g. a local test frontend for browser tests
   };
   const child = spawn(process.execPath, [path.join(distDir, "server.js")], { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
   let log = ""; child.stdout.on("data", d => { log += d; }); child.stderr.on("data", d => { log += d; });

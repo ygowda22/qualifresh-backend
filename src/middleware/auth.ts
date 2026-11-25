@@ -2,9 +2,26 @@ import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 import { AdminUser } from "../models/AdminUser";
+import { User } from "../models/User";
 
 export interface AuthRequest extends Request {
   user?: { id: string; email: string; role?: string };
+}
+
+// Optional customer login for order placement. Returns the customer's id ONLY for a valid
+// customer token (role "user") of an existing, active account. Anything else — no token, an
+// invalid/expired token, an admin token, a deleted or deactivated customer — returns undefined,
+// and the caller places a normal guest order (never rejected).
+export async function customerIdFromToken(req: Request): Promise<string | undefined> {
+  const header = req.headers.authorization;
+  if (!header || !header.startsWith("Bearer ")) return undefined;
+  try {
+    const d = jwt.verify(header.split(" ")[1], process.env.JWT_SECRET as string) as { id?: string; role?: string };
+    if (d.role !== "user" || !d.id || !mongoose.isValidObjectId(d.id)) return undefined;
+    return (await User.exists({ _id: d.id, role: "user", isActive: true })) ? String(d.id) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export const authMiddleware = (

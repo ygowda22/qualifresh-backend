@@ -28,7 +28,8 @@ const UserSchema = new Schema<IUser>(
     wishlist: [{ type: Schema.Types.ObjectId, ref: "Product", default: [] }],
     cart: { type: Map, of: Number, default: {} },
   },
-  { timestamps: true }
+  // Never send the password hash in any API response (login still reads it on the server).
+  { timestamps: true, toJSON: { flattenMaps: true, transform: (_doc, ret: any) => { delete ret.password; return ret; } } }
 );
 
 UserSchema.pre("save", async function (next) {
