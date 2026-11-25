@@ -3,7 +3,8 @@ import mongoose from "mongoose";
 import { Order } from "../models/Order";
 import { User } from "../models/User";
 import { authMiddleware, adminOnly, AuthRequest, customerIdFromToken } from "../middleware/auth";
-import { priceOrderItems } from "../config/pricing";
+import { priceOrderItems, computeTotals, MAX_QUANTITY } from "../config/pricing";
+import { Product } from "../models/Product";
 import { sendOrderConfirmation, sendAdminOrderNotification, sendOrderStatusUpdate } from "../services/email";
 
 const router = Router();
@@ -177,6 +178,112 @@ router.get("/analytics", adminOnly, async (req: AuthRequest, res) => {
     });
   } catch (err) {
     res.status(500).json({ message: "Failed to fetch analytics" });
+  }
+});
+
+// ── PATCH /api/orders/:id/items — admin: edit an order's items ──────────────
+// Body: { items: [{ productId, name, slug, quantity, price }], expectedUpdatedAt }.
+// The server recalculates subtotal, delivery and total (shared rule in config/pricing.ts) and
+// ignores any totals sent. Lines already in the order keep their stored name/slug (and may stay
+// even if the product was since deleted); new lines take name/slug from the database. Prices are
+// the admin's (the UI pre-fills stored prices for existing lines and current DB prices for new
+// ones). Only pending / confirmed / out_for_delivery orders can be edited. The write is atomic
+// and only succeeds if the order is unchanged since expectedUpdatedAt.
+const EDITABLE_STATUSES = ["pending", "confirmed", "out_for_delivery"];
+const NOT_EDITABLE_LABEL: Record<string, string> = { delivered: "Delivered", cancelled: "Cancelled" };
+const ITEM_FIELDS = new Set(["productId", "name", "slug", "quantity", "price"]);
+const MAX_EDIT_LINES = 200;
+const MAX_LINE_PRICE = 100000;
+const CONFLICT = { code: "CONFLICT", message: "This order was changed by someone else. Reload and try again." };
+
+router.patch("/:id/items", adminOnly, async (req: AuthRequest, res) => {
+  const bad = (message: string, field?: string) => res.status(400).json({ message, ...(field ? { field } : {}) });
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ message: "Order not found" });
+    const body = req.body;
+    if (!body || typeof body !== "object" || Array.isArray(body)) return bad("Invalid request body");
+    for (const k of Object.keys(body)) if (k !== "items" && k !== "expectedUpdatedAt") return bad(`Unknown field "${k}"`);
+    const { items, expectedUpdatedAt } = body;
+    if (typeof expectedUpdatedAt !== "string" || isNaN(Date.parse(expectedUpdatedAt))) return bad("expectedUpdatedAt is required", "expectedUpdatedAt");
+    if (!Array.isArray(items) || items.length === 0) return bad("An order needs at least one item.", "items");
+    if (items.length > MAX_EDIT_LINES) return bad(`An order can have at most ${MAX_EDIT_LINES} items.`, "items");
+
+    // Shape + value checks for every line
+    for (const [n, it] of items.entries()) {
+      const at = `items.${n}`;
+      if (!it || typeof it !== "object" || Array.isArray(it)) return bad(`Item ${n + 1} is invalid`, at);
+      for (const k of Object.keys(it)) if (!ITEM_FIELDS.has(k)) return bad(`Unknown field "${k}" in item ${n + 1}`, `${at}.${k}`);
+      const q = it.quantity, p = it.price;
+      if (typeof q !== "number" || !Number.isInteger(q) || q < 1 || q > MAX_QUANTITY)
+        return bad(`Quantity must be a whole number from 1 to ${MAX_QUANTITY}`, `${at}.quantity`);
+      if (typeof p !== "number" || !Number.isFinite(p) || p <= 0 || p > MAX_LINE_PRICE || Math.abs(p * 100 - Math.round(p * 100)) > 1e-6)
+        return bad(`Price must be more than ₹0 and at most ₹${MAX_LINE_PRICE}, with up to 2 decimals`, `${at}.price`);
+      if (it.productId !== undefined && it.productId !== null) {
+        if (typeof it.productId !== "string" || !mongoose.isValidObjectId(it.productId)) return bad(`Item ${n + 1} has an invalid product`, `${at}.productId`);
+      }
+      if (it.name !== undefined && typeof it.name !== "string") return bad(`Item ${n + 1} has an invalid name`, `${at}.name`);
+      if (it.slug !== undefined && typeof it.slug !== "string") return bad(`Item ${n + 1} has an invalid slug`, `${at}.slug`);
+    }
+
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ message: "Order not found" });
+    if (!EDITABLE_STATUSES.includes(order.status)) {
+      const label = NOT_EDITABLE_LABEL[order.status] || "This";
+      return res.status(409).json({ code: "NOT_EDITABLE", message: `${label} orders can't be edited.` });
+    }
+    // Version = updatedAt (older documents without it fall back to createdAt, which the UI then sends)
+    const version: Date | undefined = (order as any).updatedAt || order.createdAt;
+    if (!version || new Date(expectedUpdatedAt).getTime() !== new Date(version).getTime()) return res.status(409).json(CONFLICT);
+
+    // Build the new lines. Stored lines are matched by product id (lines without one by name).
+    // A product may appear on several lines only if the stored order already had it that many
+    // times (old orders with the same product at different prices); new duplicates are refused.
+    const storedById = new Map<string, any[]>(), storedLegacy = new Map<string, any[]>();
+    for (const l of order.items as any[]) {
+      const map = l.productId ? storedById : storedLegacy, key = l.productId ? String(l.productId) : l.name;
+      map.set(key, [...(map.get(key) || []), l]);
+    }
+    const newIds = (items as any[]).filter(i => i.productId && !storedById.has(i.productId)).map(i => i.productId);
+    const products = newIds.length ? await Product.find({ _id: { $in: newIds } }).select("name slug").lean() : [];
+    const productById = new Map(products.map((p: any) => [String(p._id), p]));
+    const used = new Map<string, number>();
+    const take = (key: string, stored: any[] | undefined) => { const i = used.get(key) || 0; used.set(key, i + 1); return { i, line: stored?.[i] }; };
+    const lines: { productId?: mongoose.Types.ObjectId; name: string; slug: string; quantity: number; price: number }[] = [];
+    for (const [n, it] of (items as any[]).entries()) {
+      if (it.productId) {
+        const stored = storedById.get(it.productId);
+        const { i, line: old } = take(`id:${it.productId}`, stored);
+        if (i > 0 && !old) return bad(`A product appears twice in the order (item ${n + 1})`, `items.${n}.productId`);
+        if (old) { lines.push({ productId: old.productId, name: old.name, slug: old.slug, quantity: it.quantity, price: it.price }); continue; }
+        const p: any = productById.get(it.productId);
+        if (!p) return bad(`Item ${n + 1}: this product no longer exists. Remove it and try again.`, `items.${n}.productId`);
+        lines.push({ productId: p._id, name: p.name, slug: p.slug, quantity: it.quantity, price: it.price });
+      } else {
+        // A line without a product id can only be an existing (legacy) line, matched by its stored name
+        const { line: old } = typeof it.name === "string" ? take(`name:${it.name}`, storedLegacy.get(it.name)) : { line: undefined };
+        if (!old) return bad(`Item ${n + 1} is not a catalogue product`, `items.${n}.productId`);
+        lines.push({ name: old.name, slug: old.slug, quantity: it.quantity, price: it.price });
+      }
+    }
+
+    const totals = computeTotals(lines);
+    const snapshot = (o: any) => ({
+      items: o.items.map((l: any) => ({ ...(l.productId ? { productId: l.productId } : {}), name: l.name, slug: l.slug, quantity: l.quantity, price: l.price })),
+      subtotal: o.subtotal, deliveryCharge: o.deliveryCharge, total: o.total,
+    });
+    const audit = { editedAt: new Date(), editedBy: req.user?.email || String(req.user?.id || "admin"), before: snapshot(order), after: snapshot({ items: lines, ...totals }) };
+
+    // Atomic: only if nobody changed the order (or its status) since it was loaded.
+    const updated = await Order.findOneAndUpdate(
+      { _id: order._id, updatedAt: (order as any).updatedAt ?? { $exists: false }, status: { $in: EDITABLE_STATUSES } },
+      { $set: { items: lines, subtotal: totals.subtotal, deliveryCharge: totals.deliveryCharge, total: totals.total }, $push: { editHistory: audit } },
+      { new: true, runValidators: true }
+    ).populate("user", "name email phone");
+    if (!updated) return res.status(409).json(CONFLICT);
+    res.json(updated);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to update order" });
   }
 });
 

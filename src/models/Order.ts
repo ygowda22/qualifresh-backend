@@ -25,6 +25,16 @@ export interface IOrder extends Document {
   status: "pending" | "confirmed" | "out_for_delivery" | "delivered" | "cancelled";
   source: "website" | "whatsapp";
   createdAt: Date;
+  editHistory?: IOrderEdit[];
+}
+
+// Backend-only audit of admin item edits. select:false keeps it out of every query result,
+// so no API response (admin list, My Orders, …) ever contains it. Older orders simply have none.
+export interface IOrderEdit {
+  editedAt: Date;
+  editedBy: string;
+  before: { items: IOrderItem[]; subtotal: number; deliveryCharge: number; total: number };
+  after: { items: IOrderItem[]; subtotal: number; deliveryCharge: number; total: number };
 }
 
 const OrderItemSchema = new Schema<IOrderItem>({
@@ -52,6 +62,7 @@ const OrderSchema = new Schema<IOrder>(
     notes:          { type: String },
     status:         { type: String, enum: ["pending","confirmed","out_for_delivery","delivered","cancelled"], default: "pending" },
     source:         { type: String, enum: ["website","whatsapp"], default: "website" },
+    editHistory:    { type: [{ _id: false, editedAt: Date, editedBy: String, before: Schema.Types.Mixed, after: Schema.Types.Mixed }], select: false, default: undefined },
   },
   { timestamps: true }
 );
