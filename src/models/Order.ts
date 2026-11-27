@@ -6,6 +6,7 @@ export interface IOrderItem {
   slug: string;
   quantity: number;
   price: number;
+  weightKg?: number; // actual weight for per-kg items (set by admin at packing); billed as price × weightKg
 }
 
 export interface IOrder extends Document {
@@ -43,6 +44,7 @@ const OrderItemSchema = new Schema<IOrderItem>({
   slug:      { type: String, required: true },
   quantity:  { type: Number, required: true, min: 1 },
   price:     { type: Number, required: true },
+  weightKg:  { type: Number, min: 0.05, max: 50 },
 });
 
 const OrderSchema = new Schema<IOrder>(
