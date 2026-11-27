@@ -191,7 +191,8 @@ router.get("/analytics", adminOnly, async (req: AuthRequest, res) => {
 // and only succeeds if the order is unchanged since expectedUpdatedAt.
 const EDITABLE_STATUSES = ["pending", "confirmed", "out_for_delivery"];
 const NOT_EDITABLE_LABEL: Record<string, string> = { delivered: "Delivered", cancelled: "Cancelled" };
-const ITEM_FIELDS = new Set(["productId", "name", "slug", "quantity", "price"]);
+const ITEM_FIELDS = new Set(["productId", "name", "slug", "quantity", "price", "weightKg"]);
+const MIN_WEIGHT_KG = 0.05, MAX_WEIGHT_KG = 50;
 const MAX_EDIT_LINES = 200;
 const MAX_LINE_PRICE = 100000;
 const CONFLICT = { code: "CONFLICT", message: "This order was changed by someone else. Reload and try again." };
@@ -223,6 +224,9 @@ router.patch("/:id/items", adminOnly, async (req: AuthRequest, res) => {
       }
       if (it.name !== undefined && typeof it.name !== "string") return bad(`Item ${n + 1} has an invalid name`, `${at}.name`);
       if (it.slug !== undefined && typeof it.slug !== "string") return bad(`Item ${n + 1} has an invalid slug`, `${at}.slug`);
+      const w = it.weightKg;
+      if (w !== undefined && w !== null && (typeof w !== "number" || !Number.isFinite(w) || w < MIN_WEIGHT_KG || w > MAX_WEIGHT_KG || Math.abs(w * 100 - Math.round(w * 100)) > 1e-6))
+        return bad(`Weight must be between ${MIN_WEIGHT_KG} and ${MAX_WEIGHT_KG} kg, with up to 2 decimals`, `${at}.weightKg`);
     }
 
     const order = await Order.findById(req.params.id);
@@ -243,21 +247,26 @@ router.patch("/:id/items", adminOnly, async (req: AuthRequest, res) => {
       const map = l.productId ? storedById : storedLegacy, key = l.productId ? String(l.productId) : l.name;
       map.set(key, [...(map.get(key) || []), l]);
     }
-    const newIds = (items as any[]).filter(i => i.productId && !storedById.has(i.productId)).map(i => i.productId);
-    const products = newIds.length ? await Product.find({ _id: { $in: newIds } }).select("name slug").lean() : [];
+    // products to look up: newly added lines, and every line with a weight (to check it is sold per kg)
+    const hasWeight = (i: any) => typeof i.weightKg === "number";
+    const newIds = (items as any[]).filter(i => i.productId && (!storedById.has(i.productId) || hasWeight(i))).map(i => i.productId);
+    const products = newIds.length ? await Product.find({ _id: { $in: newIds } }).select("name slug priceUnit").lean() : [];
     const productById = new Map(products.map((p: any) => [String(p._id), p]));
     const used = new Map<string, number>();
     const take = (key: string, stored: any[] | undefined) => { const i = used.get(key) || 0; used.set(key, i + 1); return { i, line: stored?.[i] }; };
-    const lines: { productId?: mongoose.Types.ObjectId; name: string; slug: string; quantity: number; price: number }[] = [];
+    const lines: { productId?: mongoose.Types.ObjectId; name: string; slug: string; quantity: number; price: number; weightKg?: number }[] = [];
     for (const [n, it] of (items as any[]).entries()) {
+      if (hasWeight(it) && (!it.productId || (productById.get(it.productId) as any)?.priceUnit !== "per_kg"))
+        return bad(`Item ${n + 1}: weight can only be set on items sold per kg`, `items.${n}.weightKg`);
+      const weight = hasWeight(it) ? { weightKg: it.weightKg } : {};
       if (it.productId) {
         const stored = storedById.get(it.productId);
         const { i, line: old } = take(`id:${it.productId}`, stored);
         if (i > 0 && !old) return bad(`A product appears twice in the order (item ${n + 1})`, `items.${n}.productId`);
-        if (old) { lines.push({ productId: old.productId, name: old.name, slug: old.slug, quantity: it.quantity, price: it.price }); continue; }
+        if (old) { lines.push({ productId: old.productId, name: old.name, slug: old.slug, quantity: it.quantity, price: it.price, ...weight }); continue; }
         const p: any = productById.get(it.productId);
         if (!p) return bad(`Item ${n + 1}: this product no longer exists. Remove it and try again.`, `items.${n}.productId`);
-        lines.push({ productId: p._id, name: p.name, slug: p.slug, quantity: it.quantity, price: it.price });
+        lines.push({ productId: p._id, name: p.name, slug: p.slug, quantity: it.quantity, price: it.price, ...weight });
       } else {
         // A line without a product id can only be an existing (legacy) line, matched by its stored name
         const { line: old } = typeof it.name === "string" ? take(`name:${it.name}`, storedLegacy.get(it.name)) : { line: undefined };
@@ -268,7 +277,7 @@ router.patch("/:id/items", adminOnly, async (req: AuthRequest, res) => {
 
     const totals = computeTotals(lines);
     const snapshot = (o: any) => ({
-      items: o.items.map((l: any) => ({ ...(l.productId ? { productId: l.productId } : {}), name: l.name, slug: l.slug, quantity: l.quantity, price: l.price })),
+      items: o.items.map((l: any) => ({ ...(l.productId ? { productId: l.productId } : {}), name: l.name, slug: l.slug, quantity: l.quantity, price: l.price, ...(typeof l.weightKg === "number" ? { weightKg: l.weightKg } : {}) })),
       subtotal: o.subtotal, deliveryCharge: o.deliveryCharge, total: o.total,
     });
     const audit = { editedAt: new Date(), editedBy: req.user?.email || String(req.user?.id || "admin"), before: snapshot(order), after: snapshot({ items: lines, ...totals }) };

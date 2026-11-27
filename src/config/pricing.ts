@@ -12,9 +12,15 @@ export const MAX_QUANTITY = 999;
 export interface PricedLine { productId: mongoose.Types.ObjectId; name: string; slug: string; quantity: number; price: number; }
 export interface Totals { subtotal: number; deliveryCharge: number; total: number; }
 
+/** Line amount in paise: price × weightKg for weighed per-kg lines, otherwise price × quantity. */
+export function linePaise(l: { price: number; quantity: number; weightKg?: number | null }): number {
+  if (typeof l.weightKg === "number") return Math.round(l.price * 100 * l.weightKg); // rounded to the nearest paisa
+  return Math.round(l.price * 100) * l.quantity;
+}
+
 /** Subtotal, delivery charge and total, calculated in paise so decimals never drift. */
-export function computeTotals(lines: { price: number; quantity: number }[]): Totals {
-  const sub = lines.reduce((s, l) => s + Math.round(l.price * 100) * l.quantity, 0);
+export function computeTotals(lines: { price: number; quantity: number; weightKg?: number | null }[]): Totals {
+  const sub = lines.reduce((s, l) => s + linePaise(l), 0);
   const delivery = sub === 0 || sub >= FREE_DELIVERY_ABOVE * 100 ? 0 : DELIVERY_CHARGE * 100;
   return { subtotal: sub / 100, deliveryCharge: delivery / 100, total: (sub + delivery) / 100 };
 }
